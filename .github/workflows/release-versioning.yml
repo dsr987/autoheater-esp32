@@ -1,0 +1,120 @@
+name: Release Version Automation
+
+on:
+  workflow_run:
+    workflows: ["Build firmware"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: autoheater-release-versioning-main
+  cancel-in-progress: false
+
+jobs:
+  release-metadata:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    env:
+      PUSH_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve merged PR for the completed main push
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${PUSH_SHA}/pulls?per_page=100" > "${RUNNER_TEMP}/associated-prs.json"
+          python3 tools/release_automation.py prepare-push "${RUNNER_TEMP}/associated-prs.json"
+      - name: Ensure release labels exist
+        if: ${{ steps.resolve.outputs.process == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ensure_label() {
+            local name="$1" color="$2" description="$3"
+            if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/labels?per_page=100" --jq '.[].name' | grep -Fx "$name" >/dev/null; then
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/labels" -f "name=$name" -f "color=$color" -f "description=$description" >/dev/null
+            fi
+          }
+          ensure_label "release:patch" "0E8A16" "Patch release: backward-compatible fixes"
+          ensure_label "release:minor" "1D76DB" "Minor release: compatible functionality"
+          ensure_label "release:major" "B60205" "Major release: breaking changes after 1.0.0"
+          ensure_label "release:stable" "5319E7" "Promote beta 0.x to stable 1.0.0"
+          ensure_label "release:none" "C5DEF5" "No firmware release; documentation or automation only"
+      - name: Create metadata branch
+        id: branch
+        if: ${{ steps.resolve.outputs.process == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="automation/release-metadata-pr-${PR_NUMBER}"
+          git fetch --no-tags origin main
+          git checkout -B "$branch" origin/main
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+      - name: Apply release metadata
+        id: update
+        if: ${{ steps.resolve.outputs.process == 'true' }}
+        run: python3 tools/release_automation.py apply
+      - name: Create or update release metadata PR and merge it
+        if: ${{ steps.resolve.outputs.process == 'true' && steps.update.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          SOURCE_PR: ${{ env.PR_NUMBER }}
+          BOT_BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_VERSION_CHANGED: ${{ steps.update.outputs.release }}
+          RELEASE_VERSION: ${{ steps.update.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::Add a RELEASE_AUTOMATION_TOKEN repository secret with contents and pull-request write access. A PAT is required because GITHUB_TOKEN pushes do not trigger the next push workflow."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add firmware/app/app.cpp .github/release-automation/state.json
+          if git diff --cached --quiet; then
+            echo "No metadata changes."
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m "chore: update release metadata after PR #${SOURCE_PR}"
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push --force origin "HEAD:${BOT_BRANCH}"
+          bot_pr="$(gh pr list --state open --base main --head "${BOT_BRANCH}" --json number --jq '.[0].number // empty')"
+          if [[ -z "$bot_pr" ]]; then
+            body="$(cat <<EOF
+Release type: release:none
+
+## Summary
+- Apply release metadata for merged source PR #${SOURCE_PR}.
+
+## Changelog
+- Synchronize Autoheater ESP32 version and firmware changelog metadata.
+EOF
+)"
+            gh pr create --base main --head "${BOT_BRANCH}" --title "chore: update release metadata after PR #${SOURCE_PR}" --label release:none --body "$body" >/dev/null
+            bot_pr="$(gh pr list --state open --base main --head "${BOT_BRANCH}" --json number --jq '.[0].number // empty')"
+          fi
+          test -n "$bot_pr"
+          gh pr edit "$bot_pr" --add-label release:none
+          gh pr merge "$bot_pr" --squash --delete-branch
