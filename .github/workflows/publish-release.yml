@@ -18,7 +18,7 @@ jobs:
       - name: Read version
         id: version
         run: |
-          version="$(sed -n 's/^[[:space:]]*\\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\\r')"
+          version="$(sed -n 's/^[[:space:]]*\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\r')"
           test -n "$version"
           echo "value=$version" >> "$GITHUB_OUTPUT"
       - name: Download build artifact
