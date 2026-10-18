@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "labels_initialized": true,
+  "processed_prs": [],
+  "release_prs": [],
+  "last_processed_pr": null,
+  "last_release_type": "none",
+  "last_version": "0.1.0"
+}
