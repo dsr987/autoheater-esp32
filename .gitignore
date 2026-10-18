@@ -1,0 +1,6 @@
+build/
+dist/
+*.elf
+*.map
+*.bin
+*.sha256
