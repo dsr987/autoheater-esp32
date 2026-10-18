@@ -23,10 +23,10 @@ jobs:
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^[[:space:]]*\\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\\r')"
+          version="$(sed -n 's/^[[:space:]]*\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\r')"
           test -n "$version"
           if git cat-file -e "${SOURCE_SHA}^:firmware/app/app.cpp" 2>/dev/null; then
-            previous="$(git show "${SOURCE_SHA}^:firmware/app/app.cpp" | sed -n 's/^[[:space:]]*\\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' | head -n 1 | tr -d '\\r')"
+            previous="$(git show "${SOURCE_SHA}^:firmware/app/app.cpp" | sed -n 's/^[[:space:]]*\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' | head -n 1 | tr -d '\r')"
           else
             previous=""
           fi
