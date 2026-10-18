@@ -23,8 +23,8 @@ jobs:
       - name: Install libraries
         run: |
           arduino-cli lib install "AsyncTCP"
-          arduino-cli lib install "ESP Async WebServer"
-          arduino-cli lib install "ElegantOTA"
+          arduino-cli lib install "ESPAsyncWebServer@3.1.0"
+          arduino-cli lib install "ElegantOTA@3.1.0"
       - name: Compile application
         run: arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir "$RUNNER_TEMP/app-build" firmware/app
       - name: Package OTA binary
