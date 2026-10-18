@@ -1,0 +1,29 @@
+name: Release label setup
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release-labels.yml']
+permissions:
+  issues: write
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure release labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ensure_label() {
+            local name="$1" color="$2" description="$3"
+            if ! gh api --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name' | grep -Fx "$name" >/dev/null; then
+              gh api --method POST "repos/$REPO/labels" -f "name=$name" -f "color=$color" -f "description=$description" >/dev/null
+            fi
+          }
+          ensure_label "release:patch" "0E8A16" "Patch release: fixes"
+          ensure_label "release:minor" "1D76DB" "Minor release: compatible functionality"
+          ensure_label "release:major" "B60205" "Major release: breaking changes after 1.0.0"
+          ensure_label "release:stable" "5319E7" "Promote beta 0.x to stable 1.0.0"
+          ensure_label "release:none" "C5DEF5" "No firmware release; documentation or automation only"
