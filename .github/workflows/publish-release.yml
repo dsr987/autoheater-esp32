@@ -1,0 +1,45 @@
+name: Publish firmware release
+on:
+  workflow_run:
+    workflows: ["Build firmware"]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Read version
+        id: version
+        run: |
+          version="$(sed -n 's/^[[:space:]]*\\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\\r')"
+          test -n "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: autoheater-esp32-firmware
+          path: dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: firmware-v${{ steps.version.outputs.value }}
+          name: Autoheater ESP32 — v${{ steps.version.outputs.value }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          body: |
+            Автоматическая сборка Autoheater ESP32.
+            Версия: `${{ steps.version.outputs.value }}`
+            `autoheater-esp32.bin` предназначен для обновления через ElegantOTA, а не для записи по адресу 0x0.
+          files: |
+            dist/autoheater-esp32.bin
+            dist/autoheater-esp32.bin.sha256
+          fail_on_unmatched_files: true
+          make_latest: true
