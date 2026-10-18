@@ -8,6 +8,7 @@
  * Demo web UI only. No heater protocol or WebSocket is implemented.
  */
 
+
 // -----------------------------------------------------------------------------
 // Configuration — change these credentials before using the device outside a lab.
 // -----------------------------------------------------------------------------
