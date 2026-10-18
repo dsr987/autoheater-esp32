@@ -1,0 +1,202 @@
+#include "web_page.h"
+
+#include <Arduino.h>
+#include <WebServer.h>
+
+extern const char* WEB_ADMIN_USER;
+extern const char* WEB_ADMIN_PASSWORD;
+
+namespace {
+WebServer server(80);
+
+const char PAGE_HTML[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101820">
+<title>Autoheater ESP32</title>
+<style>
+:root{color-scheme:dark;--bg:#101820;--panel:#192630;--line:#2b3c47;--text:#f2f6f8;--muted:#92a4b0;--accent:#f28c45;--green:#47c58a}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{min-height:100%;background:var(--bg)}
+body{margin:0;min-height:100vh;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(ellipse at top,#1b2b36 0%,var(--bg) 60%);color:var(--text)}
+button{font:inherit;color:inherit;border:0;cursor:pointer;touch-action:manipulation}
+.app{width:100%;max-width:480px;min-height:100vh;margin:0 auto;padding:env(safe-area-inset-top) 16px calc(22px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:22px}
+header{height:56px;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;border-bottom:1px solid var(--line)}
+.icon-btn{width:40px;height:40px;border-radius:12px;background:transparent;display:grid;place-items:center;color:#c4d0d7}
+.icon-btn:active{background:#2b3c47}
+.brand{text-align:center;font-size:15px;font-weight:750;letter-spacing:.12em}
+.brand small{display:block;font-size:9px;letter-spacing:.2em;color:var(--muted);font-weight:600;margin-top:2px}
+.temperatures{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.temp-card{min-width:0;background:linear-gradient(145deg,#1c2b36,#15212a);border:1px solid var(--line);border-radius:20px;padding:18px 10px 17px;text-align:center;box-shadow:0 10px 25px #0002}
+.temp-icon{width:34px;height:34px;margin:0 auto 10px;border-radius:11px;background:#283945;display:grid;place-items:center;color:var(--accent)}
+.temp-label{font-size:11px;line-height:1.35;min-height:30px;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.07em}
+.temp-value{font-size:clamp(34px,10vw,46px);font-weight:750;letter-spacing:-.06em;line-height:1.3;white-space:nowrap}
+.temp-value span{font-size:.52em;letter-spacing:0;color:#c2cdd3;margin-left:2px}
+.temp-foot{font-size:10px;color:#708591;margin-top:6px}
+.section-label{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.16em;text-transform:uppercase;margin:0 0 12px 3px}
+.mode-panel{background:#17242d;border:1px solid var(--line);border-radius:20px;padding:16px 12px 14px}
+.mode-row{display:grid;grid-template-columns:54px 1fr 54px;align-items:center;gap:10px}
+.arrow{height:54px;border:1px solid #344955;background:#21323d;border-radius:15px;display:grid;place-items:center;color:#e4edf1}
+.arrow:active:not(:disabled){background:#344955;transform:scale(.97)}
+.arrow:disabled{opacity:.25;cursor:default}
+.mode-display{text-align:center}
+.mode-name{font-size:37px;line-height:1.1;font-weight:800;letter-spacing:-.04em}
+.mode-sub{font-size:10px;color:var(--muted);letter-spacing:.13em;text-transform:uppercase;margin-top:5px}
+.mode-dots{display:flex;justify-content:center;gap:7px;margin-top:15px}
+.dot{width:6px;height:6px;border-radius:50%;background:#425560;transition:background .2s,transform .2s}
+.dot.active{background:var(--accent);transform:scale(1.25)}
+.power-wrap{margin-top:auto;padding-top:2px}
+.power{width:100%;min-height:76px;border-radius:22px;background:var(--green);color:#092217;display:flex;align-items:center;justify-content:center;gap:13px;font-weight:800;font-size:17px;letter-spacing:.06em;box-shadow:0 9px 28px #47c58a25;transition:background .2s,transform .12s}
+.power:active{transform:scale(.985)}
+.power.off{background:#293943;color:#d9e3e8;border:1px solid #40545f;box-shadow:none}
+.power-symbol{width:25px;height:25px}
+.status{text-align:center;color:var(--muted);font-size:11px;margin-top:12px}
+.status strong{color:var(--green);font-weight:700}
+.status strong.off{color:#a2b0b8}
+.footer{text-align:center;color:#526773;font-size:10px;letter-spacing:.04em;margin-top:4px}
+.scrim{position:fixed;inset:0;background:#0009;opacity:0;pointer-events:none;transition:opacity .2s;z-index:5}
+.drawer{position:fixed;inset:0 auto 0 0;width:min(82vw,320px);padding:calc(18px + env(safe-area-inset-top)) 18px 20px;background:#17242d;border-right:1px solid var(--line);transform:translateX(-105%);transition:transform .22s;z-index:6}
+.drawer.open{transform:translateX(0)}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:26px;font-weight:800}
+.drawer-item{width:100%;text-align:left;background:#20313b;padding:15px;border-radius:12px;margin-bottom:9px;color:#d8e2e7}
+.drawer-note{font-size:12px;color:var(--muted);line-height:1.5;margin:18px 4px}
+@media (min-width:600px){.app{padding-top:18px;padding-bottom:28px;min-height:100vh}.temp-card{padding-top:23px;padding-bottom:22px}}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+<button class="icon-btn" id="menuButton" aria-label="Открыть меню">
+<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+</button>
+<div class="brand">AUTOHEATER<small>ESP32 CONTROL</small></div>
+<button class="icon-btn" id="fullscreenButton" aria-label="Полный экран">
+<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/></svg>
+</button>
+</header>
+
+<section>
+<div class="section-label">Температура</div>
+<div class="temperatures">
+<article class="temp-card">
+<div class="temp-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v10"/><circle cx="12" cy="17" r="4"/><path d="M8 7a4 4 0 1 1 8 0v7"/></svg></div>
+<div class="temp-label">Уличная</div>
+<div class="temp-value"><span id="outsideTemp">25</span><span>°C</span></div>
+<div class="temp-foot">ДАТЧИК · ДЕМО</div>
+</article>
+<article class="temp-card">
+<div class="temp-icon"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V4h14v16M8 7h8M8 11h8M8 15h8M3 20h18"/></svg></div>
+<div class="temp-label">Теплообменник</div>
+<div class="temp-value"><span id="exchangerTemp">85</span><span>°C</span></div>
+<div class="temp-foot">ДАТЧИК · ДЕМО</div>
+</article>
+</div>
+</section>
+
+<section>
+<div class="section-label">Режим работы</div>
+<div class="mode-panel">
+<div class="mode-row">
+<button class="arrow" id="prevMode" aria-label="Предыдущий режим">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+</button>
+<div class="mode-display"><div class="mode-name" id="modeName">P1</div><div class="mode-sub">Уровень мощности</div></div>
+<button class="arrow" id="nextMode" aria-label="Следующий режим">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+</button>
+</div>
+<div class="mode-dots" id="modeDots"><span class="dot active"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+</div>
+</section>
+
+<div class="power-wrap">
+<button class="power off" id="powerButton">
+<svg class="power-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 2v10"/><path d="M6.2 5.8a8 8 0 1 0 11.6 0"/></svg>
+<span id="powerLabel">ВКЛЮЧИТЬ</span>
+</button>
+<div class="status">Статус: <strong class="off" id="statusText">ОЖИДАНИЕ</strong></div>
+</div>
+<div class="footer">LOCAL INTERFACE · PROTOCOL NOT CONNECTED</div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+<div class="drawer-head"><span>Дополнительно</span><button class="icon-btn" id="closeMenu" aria-label="Закрыть меню">✕</button></div>
+<button class="drawer-item" data-stub="Сетевые настройки">Сетевые настройки</button>
+<button class="drawer-item" data-stub="Информация об устройстве">Об устройстве</button>
+<button class="drawer-item" data-stub="Журнал событий">Журнал событий</button>
+<p class="drawer-note">Разделы пока являются заглушками. Управление отопителем и обмен данными ещё не подключены.</p>
+</aside>
+<script>
+(() => {
+  let mode = 1;
+  let powered = false;
+  let outsideStep = 0;
+  let exchangerStep = 0;
+  const $ = id => document.getElementById(id);
+  const renderMode = () => {
+    $('modeName').textContent = 'P' + mode;
+    $('prevMode').disabled = mode === 1;
+    $('nextMode').disabled = mode === 5;
+    [...$('modeDots').children].forEach((dot, i) => dot.classList.toggle('active', i === mode - 1));
+  };
+  $('prevMode').addEventListener('click', () => { if (mode > 1) { mode--; renderMode(); } });
+  $('nextMode').addEventListener('click', () => { if (mode < 5) { mode++; renderMode(); } });
+  $('powerButton').addEventListener('click', () => {
+    powered = !powered;
+    $('powerButton').classList.toggle('off', !powered);
+    $('powerLabel').textContent = powered ? 'ВЫКЛЮЧИТЬ' : 'ВКЛЮЧИТЬ';
+    $('statusText').textContent = powered ? 'ВКЛЮЧЕНО · ДЕМО' : 'ОЖИДАНИЕ';
+    $('statusText').classList.toggle('off', !powered);
+  });
+  setInterval(() => {
+    outsideStep = (outsideStep + 1) % 3;
+    exchangerStep = (exchangerStep + 1) % 3;
+    $('outsideTemp').textContent = [25, 26, 24][outsideStep];
+    $('exchangerTemp').textContent = [85, 86, 84][exchangerStep];
+  }, 2000);
+  const openMenu = () => { $('drawer').classList.add('open'); $('scrim').classList.add('open'); $('drawer').setAttribute('aria-hidden','false'); };
+  const closeMenu = () => { $('drawer').classList.remove('open'); $('scrim').classList.remove('open'); $('drawer').setAttribute('aria-hidden','true'); };
+  $('menuButton').addEventListener('click', openMenu);
+  $('closeMenu').addEventListener('click', closeMenu);
+  $('scrim').addEventListener('click', closeMenu);
+  document.querySelectorAll('[data-stub]').forEach(btn => btn.addEventListener('click', () => alert(btn.dataset.stub + ': раздел пока не реализован.')));
+  $('fullscreenButton').addEventListener('click', async () => {
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      else await document.exitFullscreen();
+    } catch (_) { alert('Полноэкранный режим не поддерживается этим браузером.'); }
+  });
+  renderMode();
+})();
+</script>
+</body>
+</html>
+)HTML";
+
+bool authorize() {
+  if (server.authenticate(WEB_ADMIN_USER, WEB_ADMIN_PASSWORD)) return true;
+  server.requestAuthentication(BASIC_AUTH, "Autoheater ESP32", "Login required");
+  return false;
+}
+}  // namespace
+
+void setupWebPage() {
+  server.on("/", HTTP_GET, []() {
+    if (!authorize()) return;
+    server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
+  });
+  server.onNotFound([]() {
+    if (!authorize()) return;
+    server.send(404, "text/plain; charset=utf-8", "Not found");
+  });
+  server.begin();
+}
+
+void loopWebPage() {
+  server.handleClient();
+}
