@@ -1,2 +1,2 @@
-// Arduino CLI entry point. Folder name and sketch name must match.
-#include "app.cpp"
+// Arduino sketch entry point. Application setup()/loop() are implemented in app.cpp.
+#include <Arduino.h>
