@@ -9,19 +9,36 @@ permissions:
   actions: read
 jobs:
   release:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Read version
+          fetch-depth: 0
+      - name: Read version and detect version change
         id: version
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          version="$(sed -n 's/^[[:space:]]*\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\r')"
+          set -euo pipefail
+          version="$(sed -n 's/^[[:space:]]*\\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' firmware/app/app.cpp | head -n 1 | tr -d '\\r')"
           test -n "$version"
+          if git cat-file -e "${SOURCE_SHA}^:firmware/app/app.cpp" 2>/dev/null; then
+            previous="$(git show "${SOURCE_SHA}^:firmware/app/app.cpp" | sed -n 's/^[[:space:]]*\\*[[:space:]]*CHANGELOG_VERSION:[[:space:]]*//p' | head -n 1 | tr -d '\\r')"
+          else
+            previous=""
+          fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == "$previous" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Firmware version unchanged ($version); no release will be created."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download build artifact
+        if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: autoheater-esp32-firmware
@@ -29,6 +46,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
       - name: Publish release
+        if: ${{ steps.version.outputs.publish == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: firmware-v${{ steps.version.outputs.value }}
@@ -37,7 +55,8 @@ jobs:
           body: |
             Автоматическая сборка Autoheater ESP32.
             Версия: `${{ steps.version.outputs.value }}`
-            `autoheater-esp32.bin` предназначен для обновления через ElegantOTA, а не для записи по адресу 0x0.
+            Файл `autoheater-esp32.bin` предназначен для обновления через ElegantOTA, а не для первичной записи по адресу 0x0.
+            Контрольная сумма SHA-256 приложена отдельно.
           files: |
             dist/autoheater-esp32.bin
             dist/autoheater-esp32.bin.sha256

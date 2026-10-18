@@ -23,14 +23,14 @@ jobs:
       - name: Install libraries
         run: |
           arduino-cli lib install "AsyncTCP"
-          arduino-cli lib install "ESP Async WebServer"
-          arduino-cli lib install "ElegantOTA"
+          arduino-cli lib install "ESPAsyncWebServer@3.1.0"
+          arduino-cli lib install "ElegantOTA@3.1.0"
       - name: Compile application
         run: arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir "$RUNNER_TEMP/app-build" firmware/app
       - name: Package OTA binary
         run: |
           mkdir -p dist
-          cp "$RUNNER_TEMP/app-build/autoheater_app.ino.bin" dist/autoheater-esp32.bin
+          cp "$RUNNER_TEMP/app-build/app.ino.bin" dist/autoheater-esp32.bin
           sha256sum dist/autoheater-esp32.bin > dist/autoheater-esp32.bin.sha256
       - name: Compile bootstrap
         run: arduino-cli compile --fqbn esp32:esp32:esp32 --build-property compiler.cpp.extra_flags="-DELEGANTOTA_USE_ASYNC_WEBSERVER=1" --output-dir "$RUNNER_TEMP/bootstrap-build" firmware/bootstrap/Autoheater_ESP32_Bootstrap
