@@ -103,15 +103,15 @@ jobs:
           bot_pr="$(gh pr list --state open --base main --head "${BOT_BRANCH}" --json number --jq '.[0].number // empty')"
           if [[ -z "$bot_pr" ]]; then
             body="$(cat <<EOF
-Release type: release:none
-
-## Summary
-- Apply release metadata for merged source PR #${SOURCE_PR}.
-
-## Changelog
-- Synchronize Autoheater ESP32 version and firmware changelog metadata.
-EOF
-)"
+          Release type: release:none
+          
+          ## Summary
+          - Apply release metadata for merged source PR #${SOURCE_PR}.
+          
+          ## Changelog
+          - Synchronize Autoheater ESP32 version and firmware changelog metadata.
+          EOF
+          )"
             gh pr create --base main --head "${BOT_BRANCH}" --title "chore: update release metadata after PR #${SOURCE_PR}" --label release:none --body "$body" >/dev/null
             bot_pr="$(gh pr list --state open --base main --head "${BOT_BRANCH}" --json number --jq '.[0].number // empty')"
           fi
