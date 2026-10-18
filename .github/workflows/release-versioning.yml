@@ -70,17 +70,17 @@ jobs:
           git checkout -B "$branch" origin/main
           echo "name=$branch" >> "$GITHUB_OUTPUT"
       - name: Apply release metadata
-        id: update
+        id: apply_metadata
         if: ${{ steps.resolve.outputs.process == 'true' }}
         run: python3 tools/release_automation.py apply
       - name: Create or update release metadata PR and merge it
-        if: ${{ steps.resolve.outputs.process == 'true' && steps.update.outputs.changed == 'true' }}
+        if: ${{ steps.resolve.outputs.process == 'true' && steps.apply_metadata.outputs.changed == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
-          SOURCE_PR: ${{ env.PR_NUMBER }}
+          SOURCE_PR: ${{ steps.resolve.outputs.pr_number }}
           BOT_BRANCH: ${{ steps.branch.outputs.name }}
-          RELEASE_VERSION_CHANGED: ${{ steps.update.outputs.release }}
-          RELEASE_VERSION: ${{ steps.update.outputs.version }}
+          RELEASE_VERSION_CHANGED: ${{ steps.apply_metadata.outputs.release }}
+          RELEASE_VERSION: ${{ steps.apply_metadata.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
