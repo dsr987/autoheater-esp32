@@ -106,7 +106,7 @@ def prepare_push(event_path):
         else: kind="already-processed"
         write_env("PR_NUMBER",str(number)); write_env("PR_LABELS",labels)
         write_env("PR_BODY",str(pr.get("body") or ""))
-        write_output(process="true",release_type=kind)
+        write_output(process="true",release_type=kind,pr_number=number)
         print(f"Resolved merged PR #{number}.")
         return 0
     except (OSError,ValueError,TypeError,ReleaseMetadataError) as e:
