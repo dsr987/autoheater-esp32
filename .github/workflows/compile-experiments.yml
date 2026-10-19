@@ -78,9 +78,21 @@ jobs:
               --output-dir "$output_dir" \
               "$sketch_dir"; then
               # Складываем отдельные артефакты с сохранением структуры папок.
+              # ESP32 core обычно называет основной образ <имя>.ino.bin.
+              # Публикуем удобное имя без дополнительного суффикса .ino.
+              compiled_bin="$output_dir/$ino_name.ino.bin"
+              if [[ ! -f "$compiled_bin" ]]; then
+                echo "::error file=$ino::Компилятор не создал ожидаемый файл $compiled_bin"
+                failed=$((failed + 1))
+                echo "::endgroup::"
+                continue
+              fi
+              named_bin="$output_dir/$ino_name.bin"
+              cp "$compiled_bin" "$named_bin"
+
               artifact_dir="build-artifacts/$(dirname "${ino#experiments/}")"
               mkdir -p "$artifact_dir"
-              cp "$output_dir/$ino_name.bin" "$artifact_dir/$ino_name.bin"
+              cp "$named_bin" "$artifact_dir/$ino_name.bin"
               echo "Успешно: $sketch_dir/build/$ino_name.bin"
             else
               echo "::error file=$ino::Ошибка компиляции скетча $ino"
