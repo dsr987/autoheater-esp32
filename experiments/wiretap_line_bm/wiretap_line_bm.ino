@@ -55,9 +55,9 @@ void setup() {
                 static_cast<unsigned long>(kFrameGapUs));
   Serial.println("# NOTE: baud/protocol/voltage compatibility are unverified hypotheses.");
 
-  // TX pin is -1: this firmware does not drive the BM line.
-  BmSerial.begin(kCandidateLineBaud, SERIAL_8N1, kBmRxPin, -1);
+  // Configure RX buffering before starting UART. TX pin -1: do not drive BM.
   BmSerial.setRxBufferSize(4096);
+  BmSerial.begin(kCandidateLineBaud, SERIAL_8N1, kBmRxPin, -1);
 }
 
 void loop() {
