@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   compile:
@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Получить исходный код
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Установить Arduino CLI
         uses: arduino/setup-arduino-cli@v2
@@ -77,9 +79,7 @@ jobs:
               --fqbn esp32:esp32:esp32 \
               --output-dir "$output_dir" \
               "$sketch_dir"; then
-              # Складываем отдельные артефакты с сохранением структуры папок.
               # ESP32 core обычно называет основной образ <имя>.ino.bin.
-              # Публикуем удобное имя без дополнительного суффикса .ino.
               compiled_bin="$output_dir/$ino_name.ino.bin"
               if [[ ! -f "$compiled_bin" ]]; then
                 echo "::error file=$ino::Компилятор не создал ожидаемый файл $compiled_bin"
@@ -87,13 +87,16 @@ jobs:
                 echo "::endgroup::"
                 continue
               fi
-              named_bin="$output_dir/$ino_name.bin"
+
+              # Сохраняем BIN рядом с исходным INO, а не только в build/.
+              named_bin="$sketch_dir/$ino_name.bin"
               cp "$compiled_bin" "$named_bin"
 
               artifact_dir="build-artifacts/$(dirname "${ino#experiments/}")"
               mkdir -p "$artifact_dir"
               cp "$named_bin" "$artifact_dir/$ino_name.bin"
-              echo "Успешно: $sketch_dir/build/$ino_name.bin"
+              echo "Успешно: $sketch_dir/$ino_name.bin"
+
             else
               echo "::error file=$ino::Ошибка компиляции скетча $ino"
               failed=$((failed + 1))
@@ -111,6 +114,26 @@ jobs:
           if [[ "$failed" -ne 0 ]]; then
             exit 1
           fi
+
+      - name: Сохранить BIN-файлы в репозитории
+        if: success() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          while IFS= read -r -d '' bin; do
+            git add -f -- "$bin"
+          done < <(find experiments -type f -name '*.bin' -print0 | sort -z)
+
+          if git diff --cached --quiet; then
+            echo "BIN-файлы не изменились; новый коммит не нужен."
+            exit 0
+          fi
+
+          git commit -m "Обновить бинарники экспериментов ESP32"
+          git push
 
       - name: Опубликовать бинарные файлы
         if: always()
