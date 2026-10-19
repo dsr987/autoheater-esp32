@@ -1,0 +1,110 @@
+name: Сборка экспериментальных скетчей ESP32
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "experiments/**"
+      - ".github/workflows/compile-experiments.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "experiments/**"
+      - ".github/workflows/compile-experiments.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Компиляция всех скетчей из experiments
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить исходный код
+        uses: actions/checkout@v4
+
+      - name: Установить Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Настроить Arduino CLI
+        run: arduino-cli config init
+
+      - name: Установить платформу ESP32
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Установить библиотеки
+        run: |
+          arduino-cli lib update-index
+          arduino-cli lib install "Adafruit GFX Library"
+          arduino-cli lib install "Adafruit SSD1306"
+
+      - name: Скомпилировать каждый экспериментальный скетч
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+
+          mkdir -p build-artifacts
+          count=0
+          failed=0
+
+          while IFS= read -r -d '' ino; do
+            count=$((count + 1))
+            sketch_dir="$(dirname "$ino")"
+            ino_name="$(basename "$ino" .ino)"
+            dir_name="$(basename "$sketch_dir")"
+
+            echo "::group::Сборка $ino"
+
+            # Arduino IDE/CLI ожидает, что имя главного .ino совпадает
+            # с именем каталога скетча.
+            if [[ "$ino_name" != "$dir_name" ]]; then
+              echo "::error file=$ino::Имя файла $ino_name.ino должно совпадать с именем папки $dir_name"
+              failed=$((failed + 1))
+              echo "::endgroup::"
+              continue
+            fi
+
+            output_dir="$GITHUB_WORKSPACE/$sketch_dir/build"
+            mkdir -p "$output_dir"
+
+            if arduino-cli compile \
+              --fqbn esp32:esp32:esp32 \
+              --output-dir "$output_dir" \
+              "$sketch_dir"; then
+              # Складываем отдельные артефакты с сохранением структуры папок.
+              artifact_dir="build-artifacts/$(dirname "${ino#experiments/}")"
+              mkdir -p "$artifact_dir"
+              cp "$output_dir/$ino_name.bin" "$artifact_dir/$ino_name.bin"
+              echo "Успешно: $sketch_dir/build/$ino_name.bin"
+            else
+              echo "::error file=$ino::Ошибка компиляции скетча $ino"
+              failed=$((failed + 1))
+            fi
+
+            echo "::endgroup::"
+          done < <(find experiments -type f -name '*.ino' -print0 | sort -z)
+
+          if [[ "$count" -eq 0 ]]; then
+            echo "В папке experiments не найдено файлов .ino."
+            exit 0
+          fi
+
+          echo "Всего найдено скетчей: $count; ошибок: $failed"
+          if [[ "$failed" -ne 0 ]]; then
+            exit 1
+          fi
+
+      - name: Опубликовать бинарные файлы
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-experiments-bin
+          path: build-artifacts/**/*.bin
+          if-no-files-found: warn
+          retention-days: 30
