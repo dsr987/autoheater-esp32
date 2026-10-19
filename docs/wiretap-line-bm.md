@@ -1,23 +1,25 @@
-# BM passive wiretap — assembly notes
+# Пассивное наблюдение линии BM — краткие заметки по подключению
 
-The initial sketch and its detailed wiring instructions are in [`experiments/wiretap_line_bm/`](../experiments/wiretap_line_bm/).
+Основной скетч и подробная инструкция находятся в каталоге [эксперимента](../experiments/wiretap_line_bm/README.md).
 
-This branch tests a narrow hypothesis: the controller connector's `BM` line might use the same wired protocol as the “blue wire” documented by other diesel-heater projects. That equivalence is not confirmed.
+В этой ветке проверяется ограниченная гипотеза: линия `BM` разъёма контроллера может использовать тот же проводной протокол, который в других проектах дизельных отопителей называют протоколом «синего провода». Эквивалентность пока **не подтверждена**.
 
-## Minimal hardware
+## Минимальный комплект оборудования
 
 - ESP32 DevKit / ESP32-WROOM-32.
-- USB data cable and computer for programming/logging.
-- Multimeter and oscilloscope or logic analyzer.
-- Receive-only high-impedance signal interface chosen after measuring BM.
-- Test leads/adapters; optional I²C OLED is not needed for raw capture.
+- Кабель USB с линиями передачи данных и компьютер для прошивки и записи журнала.
+- Мультиметр и осциллограф либо логический анализатор.
+- Высокоомный входной интерфейс только для приёма, выбранный после измерения BM.
+- Измерительные провода и переходники; OLED-дисплей I²C нужен для показа телеметрии, но не обязателен для записи сырых данных.
 
-## Pinout summary
+## Краткая схема подключения
 
-- BM → measured/protected input interface → ESP32 GPIO16 (UART2 RX).
-- Verified controller GND → ESP32 GND only after confirming the shared reference is safe.
-- ESP32 TX is not used and must not be connected to BM.
-- USB serial console: 115200 baud.
-- Initial candidate line format: 25,000 baud, 8N1; hypothesis only.
+- BM → измеренный и защищённый входной интерфейс → GPIO16 ESP32 (UART2 RX).
+- Подтверждённый GND контроллера → GND ESP32, только если безопасность общей точки отсчёта проверена.
+- Вывод ESP32 TX не используется и не должен подключаться к BM.
+- Последовательный порт USB: 115200 бод.
+- Предполагаемый формат линии для первого опыта: 25 000 бод, 8N1. Это гипотеза, а не подтверждённая спецификация.
 
-**Electrical safety:** ESP32 GPIOs are not 5 V tolerant. Measure the line before connecting the ESP32. Do not use a generic I²C level-shifter board by default for an unknown shared/UART-like signal. Do not connect VCC to the ESP32. This firmware is receive-only and must remain so during initial experiments.
+**Электробезопасность:** GPIO ESP32 не допускают 5 В. Измерьте сигнал до подключения ESP32. Не используйте обычный преобразователь уровней для I²C по умолчанию для неизвестной общей линии, похожей на UART. Не соединяйте VCC контроллера с питанием ESP32. На первых этапах прошивка должна только принимать данные.
+
+Подробные шаги, список компонентов, проверка результата и контрольный список приведены в [инструкции эксперимента](../experiments/wiretap_line_bm/README.md).
