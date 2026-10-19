@@ -1,83 +1,84 @@
-# BM line wiretap — compatibility hypothesis test
+# Пассивное наблюдение линии BM — проверка совместимости
 
-**Goal:** test whether the controller's `BM` line is compatible with the published “blue-wire” Chinese diesel-heater protocol. This sketch uses the reference project's 48-byte exchange framing, CRC16/Modbus checks and telemetry byte offsets. Compatibility is not confirmed until valid CRC-checked exchanges and plausible changing live values are observed on this actual controller.
+**Цель:** проверить, совместима ли линия `BM` штатного контроллера с опубликованным протоколом «синего провода», используемым некоторыми китайскими дизельными отопителями. Скетч использует формат обмена из 48 байт, проверку CRC16/Modbus и смещения полей телеметрии из проекта-образца. Совместимость нельзя считать подтверждённой, пока на реальном контроллере не будут получены повторяющиеся кадры с корректной CRC и правдоподобными изменяющимися показаниями.
 
-## Firmware behavior
+## Что делает прошивка
 
-- ESP32 UART2 receive-only at 25,000 baud, 8N1; GPIO16 is RX and TX is not configured.
-- Collects candidate 48-byte exchanges beginning with `0x76 0x16` or `0x78 0x16`.
-- Validates the controller and heater 24-byte subframes with the reference project's CRC16/Modbus algorithm, plus expected headers/check bytes.
-- On valid exchanges, decodes heater state, requested duty, derived duty percentage, pump frequency, fan RPM, chamber temperature and error code.
-- Shows telemetry and link freshness on an SSD1306 128×64 I²C OLED; also prints raw valid exchanges and decoded values to USB serial at 115200 baud.
-- Does not transmit commands or drive the BM line.
+- Принимает данные только на UART2 ESP32: 25 000 бод, 8N1; GPIO16 используется как RX, передача не настроена.
+- Ищет возможные обмены длиной 48 байт, начинающиеся с `0x76 0x16` или `0x78 0x16`.
+- Проверяет CRC16/Modbus двух блоков по 24 байта, а также ожидаемые заголовки и контрольные байты.
+- При успешной проверке декодирует состояние отопителя, заданную мощность, расчётный процент мощности, частоту топливного насоса, обороты вентилятора, температуру камеры сгорания и код ошибки.
+- Выводит телеметрию и актуальность связи на OLED SSD1306 128×64 с интерфейсом I²C. Исходные корректные обмены и декодированные значения также выводятся в последовательный порт USB со скоростью 115200 бод.
+- Не передаёт команды и не управляет электрическим состоянием линии BM.
 
-Reference implementation: [timmchugh11/Chinese-Diesel-Heater---ESPHome, heater_uart.cpp](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome/blob/main/components/diesel_heater/heater_uart.cpp). Field offsets and CRC checks follow that code; this standalone sketch is an experimental port, not a certified port of the complete component.
+Эталонная реализация: [timmchugh11/Chinese-Diesel-Heater---ESPHome, файл heater_uart.cpp](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome/blob/main/components/diesel_heater/heater_uart.cpp). Смещения полей и проверка CRC перенесены из этого кода. Данный отдельный скетч — экспериментальный перенос отдельных частей, а не сертифицированный перенос всего компонента.
 
-## Required components
+## Необходимые компоненты
 
-1. Classic ESP32 DevKit / ESP32-WROOM-32 board with GPIO16 available.
-2. 128×64 I²C OLED using SSD1306 controller (the sketch uses I²C address `0x3C`).
-3. USB data cable and computer.
-4. Multimeter.
-5. Oscilloscope or logic analyzer with an input range suitable for the measured signal.
-6. A **receive-only, high-impedance input interface** between BM and GPIO16, selected after measuring the signal. If BM is 5 V, use a suitable divider or buffer that keeps the ESP32 input within its permitted range. If the line is open-drain/shared, negative-going, or otherwise nonstandard, design the interface from the observed waveform.
-7. Jumper wires / connector breakout that does not damage the factory harness.
+1. Плата ESP32 DevKit на классическом ESP32 / ESP32-WROOM-32 с доступным GPIO16.
+2. OLED-дисплей 128×64 с интерфейсом I²C и контроллером SSD1306. В скетче используется адрес `0x3C`.
+3. Кабель USB с линиями передачи данных и компьютер.
+4. Мультиметр.
+5. Осциллограф или логический анализатор с диапазоном входа, подходящим для измеренного сигнала.
+6. **Высокоомный входной интерфейс только для приёма** между BM и GPIO16. Выбирать его следует после измерения сигнала. Если на BM присутствует 5 В, нужен делитель или буфер, ограничивающий напряжение на входе ESP32 допустимым уровнем. Если линия с открытым стоком, общая для нескольких устройств, имеет отрицательные импульсы или другие нестандартные характеристики, интерфейс нужно проектировать по фактически измеренной осциллограмме.
+7. Провода и переходник-разветвитель, позволяющие подключиться без повреждения штатного жгута.
 
-No transistor/button interface is required; this is telemetry-only. Do not connect the controller's VCC pin to ESP32 power.
+Транзисторный интерфейс для кнопок не нужен: этот прототип предназначен только для чтения телеметрии. Не подключайте контакт VCC контроллера к питанию ESP32.
 
-## Pinout
+## Распиновка
 
-| Signal | Connect to | Notes |
+| Сигнал | Подключение | Примечание |
 |---|---|---|
-| Verified controller GND | ESP32 GND | Only after confirming the common reference is safe. |
-| BM | Input-interface input | Measure before connecting. Never connect directly to GPIO16 while levels are unknown. |
-| Input-interface output | ESP32 GPIO16 | Must be 3.3 V-compatible and must not drive BM. |
-| OLED GND | ESP32 GND | Common ground. |
-| OLED VCC | 3V3 (if supported by the module) | Check the specific OLED module's power requirements. |
-| OLED SDA | GPIO21 | Configured in the sketch. |
-| OLED SCL | GPIO22 | Configured in the sketch. |
-| ESP32 GPIO17 / UART TX | **Not connected** | Firmware passes TX=-1; do not wire TX to BM. |
-| USB | Computer | Serial Monitor at 115200 baud. |
+| Подтверждённый GND контроллера | GND ESP32 | Только после проверки безопасности общей точки отсчёта. |
+| BM | Вход входного интерфейса | Сначала измерить. Не подключать напрямую к GPIO16, пока уровни неизвестны. |
+| Выход входного интерфейса | GPIO16 ESP32 | Должен быть совместим с логикой 3,3 В и не должен управлять линией BM. |
+| GND дисплея OLED | GND ESP32 | Общая земля. |
+| VCC дисплея OLED | 3V3, если это поддерживает модуль | Проверить требования конкретного модуля к питанию. |
+| SDA дисплея OLED | GPIO21 | Настроено в скетче. |
+| SCL дисплея OLED | GPIO22 | Настроено в скетче. |
+| GPIO17 ESP32 / UART TX | **Не подключать** | В прошивке передача отключена (`TX=-1)); не соединять TX с BM. |
+| USB | Компьютер | Монитор последовательного порта — 115200 бод. |
 
-OLED modules vary: verify supply voltage, I²C address and controller. The sketch currently probes address `0x3C`; common modules at `0x3D` need a code change.
+Модули OLED различаются. Проверьте напряжение питания, адрес I²C и тип контроллера. Скетч проверяет адрес `0x3C`; для распространённых модулей с адресом `0x3D` потребуется изменить код.
 
-### Optional divider — only after measurement
+### Пример делителя напряжения — только после измерений
 
-For a verified 0–5 V push-pull signal, 12 kΩ from BM to the RX node and 20 kΩ from that node to GND gives about 3.1 V from 5.0 V under the assumed conditions. This is an example, not an approved interface for an unknown bus. Check maximum and idle voltage, polarity, source impedance, and whether the line is shared/open-drain. Use a suitable buffer/interface where needed.
+Для подтверждённого двухтактного сигнала 0–5 В резистор 12 кОм от BM до узла RX и резистор 20 кОм от этого узла к GND дают около 3,1 В при входных 5,0 В в предполагаемых условиях. Это лишь пример, а не готовая схема для неизвестной линии. Проверьте максимальное и напряжение покоя, полярность, выходное сопротивление источника и то, является ли линия общей или с открытым стоком. При необходимости используйте подходящий буфер или специализированный согласующий интерфейс.
 
-## Build and run
+## Сборка и запуск
 
-Arduino IDE libraries:
+Установите в Arduino IDE библиотеки:
+
 - Adafruit SSD1306
 - Adafruit GFX Library
 
-Then:
+Затем:
 
-1. Open `wiretap_line_bm.ino`.
-2. Select a classic ESP32 DevKit / ESP32-WROOM-32 board and its USB port.
-3. Upload.
-4. Open Serial Monitor at **115200 baud**.
-5. After measuring the bus and installing the appropriate receive interface, connect BM to the interface input and the interface output to GPIO16.
-6. Observe the OLED and save the serial log.
+1. Откройте файл `wiretap_line_bm.ino`.
+2. Выберите плату классического ESP32 DevKit / ESP32-WROOM-32 и соответствующий USB-порт.
+3. Загрузите прошивку.
+4. Откройте монитор последовательного порта на скорости **115200 бод**.
+5. Только после измерения линии и установки подходящего входного интерфейса подключите BM ко входу интерфейса, а его выход — к GPIO16.
+6. Наблюдайте за OLED и сохраните журнал последовательного порта.
 
-## Interpreting the result
+## Как трактовать результат
 
-- **Strong positive evidence:** repeated `RX valid` lines; both 24-byte CRCs pass; header/check bytes match; telemetry values are plausible and change consistently with actual heater operation or panel setting. This strongly supports compatibility with the reference protocol.
-- **Inconclusive:** no valid exchanges. Possible causes include wrong electrical interface/polarity, baud/framing, wiring, missing common reference, dropped bytes, different controller traffic timing, or incompatible protocol. This alone does **not** disprove the hypothesis.
-- **Evidence against direct compatibility:** stable, correctly captured waveforms and repeatable traffic at the expected baud, but repeated exchanges fail the reference framing/CRC checks; or valid frames are obtained but the mapped fields are consistently implausible. Preserve the raw waveform and bytes before concluding the protocol differs.
+- **Сильное подтверждение гипотезы:** регулярно появляются сообщения `RX valid`; обе CRC блоков по 24 байта корректны; заголовки и контрольные байты соответствуют ожиданиям; значения телеметрии правдоподобны и закономерно меняются при изменении состояния отопителя или настройки пульта. Это серьёзный аргумент в пользу совместимости с эталонным протоколом.
+- **Результат не определён:** корректных обменов нет. Возможные причины — неподходящий электрический интерфейс или полярность, скорость или формат UART, ошибка подключения, отсутствие общей точки отсчёта, потерянные байты, другая периодичность обмена либо несовместимый протокол. Само по себе отсутствие корректных кадров **не опровергает** гипотезу.
+- **Признаки несовместимости:** осциллограмма чистая и стабильная, обмен многократно захвачен при ожидаемой скорости, но кадры снова и снова не проходят проверку структуры или CRC; либо кадры проходят проверку, но расшифрованные поля постоянно содержат неправдоподобные значения. Перед выводом о различии протоколов сохраните исходную осциллограмму и байтовые данные.
 
-The OLED's `Waiting for valid data` screen means only that no accepted exchange has arrived. It is not itself a verdict.
+Экран OLED «Ожидание корректных данных» означает только то, что подходящий обмен пока не получен. Это не окончательный вывод о совместимости.
 
-## First experiment checklist
+## Контрольный список первого опыта
 
-- [ ] Photograph the connector and note the viewing orientation.
-- [ ] Confirm GND with power off and meter checks.
-- [ ] Measure BM idle and peak voltage before attaching ESP32.
-- [ ] Capture BM on a scope/logic analyzer and confirm bit timing/polarity.
-- [ ] Verify the interface output stays within ESP32 input limits and does not drive/load BM.
-- [ ] Record heater state and any panel actions alongside the capture.
-- [ ] Save raw serial logs and scope/logic-analyzer captures unchanged.
+- [ ] Сфотографировать разъём и записать ориентацию, с которой он рассматривается.
+- [ ] При отключённом питании проверить предполагаемый GND мультиметром.
+- [ ] До подключения ESP32 измерить напряжение покоя и максимальное напряжение BM.
+- [ ] Записать сигнал осциллографом или логическим анализатором и оценить длительность битов и полярность.
+- [ ] Проверить, что выход входного интерфейса не выходит за допустимые пределы ESP32 и не управляет линией BM.
+- [ ] Записать состояние отопителя и действия с пультом во время захвата.
+- [ ] Сохранить исходные журналы и файлы осциллографа/логического анализатора без изменений.
 
-## Safety and scope
+## Безопасность и ограничения
 
-This is RX-only. Do not add UART TX, send protocol commands, or emulate button presses in this test. ESP32 GPIOs are not 5 V tolerant. Stop if connecting the interface changes the controller's behavior or signal waveform.
+Это прошивка только для приёма. Не добавляйте передачу UART, не отправляйте команды протокола и не имитируйте нажатия кнопок в рамках этого опыта. Входы GPIO ESP32 не допускают 5 В. Прекратите эксперимент, если подключение интерфейса меняет поведение контроллера или форму сигнала.
