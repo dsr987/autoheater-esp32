@@ -1,80 +1,83 @@
-# BM line wiretap — first passive capture
+# BM line wiretap — compatibility hypothesis test
 
-**Status:** experimental hardware/software scaffold. This does not establish that the controller's `BM` pin uses the same protocol as the “blue wire” in other diesel-heater projects.
+**Goal:** test whether the controller's `BM` line is compatible with the published “blue-wire” Chinese diesel-heater protocol. This sketch uses the reference project's 48-byte exchange framing, CRC16/Modbus checks and telemetry byte offsets. Compatibility is not confirmed until valid CRC-checked exchanges and plausible changing live values are observed on this actual controller.
 
-## What the firmware does
+## Firmware behavior
 
-- Opens ESP32 UART2 as **receive-only** at a candidate 25,000 baud, 8N1.
-- Reads bytes from GPIO16 and prints timestamped hexadecimal chunks to the USB serial console at 115200 baud.
-- Splits console output after a 4 ms idle gap or 64 bytes. These are display chunks, **not decoded protocol packets**.
-- Does not implement a heater protocol parser, send commands, drive a GPIO output, or use the OLED.
-- Emits a 10-second counter so a quiet line can be distinguished from a reboot.
+- ESP32 UART2 receive-only at 25,000 baud, 8N1; GPIO16 is RX and TX is not configured.
+- Collects candidate 48-byte exchanges beginning with `0x76 0x16` or `0x78 0x16`.
+- Validates the controller and heater 24-byte subframes with the reference project's CRC16/Modbus algorithm, plus expected headers/check bytes.
+- On valid exchanges, decodes heater state, requested duty, derived duty percentage, pump frequency, fan RPM, chamber temperature and error code.
+- Shows telemetry and link freshness on an SSD1306 128×64 I²C OLED; also prints raw valid exchanges and decoded values to USB serial at 115200 baud.
+- Does not transmit commands or drive the BM line.
 
-If no readable bytes appear, do not conclude that the line is inactive. The baud rate, framing, polarity, electrical interface, and even the BM/blue-wire equivalence are unverified. Capture the waveform with an oscilloscope or logic analyzer before changing decoder assumptions.
+Reference implementation: [timmchugh11/Chinese-Diesel-Heater---ESPHome, heater_uart.cpp](https://github.com/timmchugh11/Chinese-Diesel-Heater---ESPHome/blob/main/components/diesel_heater/heater_uart.cpp). Field offsets and CRC checks follow that code; this standalone sketch is an experimental port, not a certified port of the complete component.
 
 ## Required components
 
-1. Classic ESP32 DevKit / ESP32-WROOM-32 board (GPIO16 available).
-2. USB cable for power/programming and the serial log.
-3. Digital multimeter.
-4. Oscilloscope or logic analyzer with a suitable input range; probe/adapter for the connector.
-5. **A receive-only, high-impedance input interface** between BM and GPIO16, selected only after measuring the line:
-   - common ground reference, after confirming it is safe to share;
-   - if the line is a 5 V logic signal, a suitable divider or buffer that keeps the ESP32 input within its specified range;
-   - if the line is open-drain, negative-going, noisy, or otherwise non-UART, design the interface from measured waveforms rather than assuming a resistor divider is sufficient.
-6. Jumper wires / test leads that do not damage the factory harness.
+1. Classic ESP32 DevKit / ESP32-WROOM-32 board with GPIO16 available.
+2. 128×64 I²C OLED using SSD1306 controller (the sketch uses I²C address `0x3C`).
+3. USB data cable and computer.
+4. Multimeter.
+5. Oscilloscope or logic analyzer with an input range suitable for the measured signal.
+6. A **receive-only, high-impedance input interface** between BM and GPIO16, selected after measuring the signal. If BM is 5 V, use a suitable divider or buffer that keeps the ESP32 input within its permitted range. If the line is open-drain/shared, negative-going, or otherwise nonstandard, design the interface from the observed waveform.
+7. Jumper wires / connector breakout that does not damage the factory harness.
 
-Optional: 128×64 I²C OLED. It is not required for first captures; serial logs preserve more raw information and are easier to compare. This initial sketch does not drive an OLED.
+No transistor/button interface is required; this is telemetry-only. Do not connect the controller's VCC pin to ESP32 power.
 
-## Connection / pinout
+## Pinout
 
 | Signal | Connect to | Notes |
 |---|---|---|
-| Controller connector `GND` (only after verified) | ESP32 GND | Establish common reference only after confirming ground with a meter. |
-| Controller `BM` (only after measuring levels) | Input-interface signal input | **Do not connect directly** to an ESP32 GPIO while voltage/interface type is unknown. |
-| Input-interface output | ESP32 GPIO16 (UART2 RX) | Output must be compatible with 3.3 V ESP32 logic and must not drive BM. |
-| ESP32 USB | Computer | Serial console at 115200 baud. |
-| ESP32 GPIO17 / UART2 TX | **Not connected** | Firmware sets TX pin to -1; do not wire TX to BM. |
-| OLED (optional) | Not connected for this test | If added later: SDA/SCL depend on the specific ESP32 board and display module. |
+| Verified controller GND | ESP32 GND | Only after confirming the common reference is safe. |
+| BM | Input-interface input | Measure before connecting. Never connect directly to GPIO16 while levels are unknown. |
+| Input-interface output | ESP32 GPIO16 | Must be 3.3 V-compatible and must not drive BM. |
+| OLED GND | ESP32 GND | Common ground. |
+| OLED VCC | 3V3 (if supported by the module) | Check the specific OLED module's power requirements. |
+| OLED SDA | GPIO21 | Configured in the sketch. |
+| OLED SCL | GPIO22 | Configured in the sketch. |
+| ESP32 GPIO17 / UART TX | **Not connected** | Firmware passes TX=-1; do not wire TX to BM. |
+| USB | Computer | Serial Monitor at 115200 baud. |
 
-Connector labels such as `GND`, `BM`, and `VCC` are provisional observations, not proof of electrical function. Verify the exact pads and connector orientation before wiring. Do not connect the connector's VCC to ESP32 3V3 or 5V.
+OLED modules vary: verify supply voltage, I²C address and controller. The sketch currently probes address `0x3C`; common modules at `0x3D` need a code change.
 
-### Example only: resistive divider for a verified 5 V signal
+### Optional divider — only after measurement
 
-A 12 kΩ series/top resistor from BM to the RX node and a 20 kΩ resistor from RX node to GND would produce about 3.1 V from 5.0 V **under the assumed conditions**. This is not a universal interface design: first check idle voltage, maximum voltage, polarity, source impedance, and whether the line is shared/open-drain. Use a buffer or a purpose-built interface if those conditions are not established. Never let the RX node exceed the ESP32's permitted input voltage.
+For a verified 0–5 V push-pull signal, 12 kΩ from BM to the RX node and 20 kΩ from that node to GND gives about 3.1 V from 5.0 V under the assumed conditions. This is an example, not an approved interface for an unknown bus. Check maximum and idle voltage, polarity, source impedance, and whether the line is shared/open-drain. Use a suitable buffer/interface where needed.
 
 ## Build and run
 
-This is a standalone Arduino sketch (no third-party libraries required):
+Arduino IDE libraries:
+- Adafruit SSD1306
+- Adafruit GFX Library
 
-1. Open `wiretap_line_bm.ino` in Arduino IDE.
-2. Select an ESP32 board package and the correct board/port.
-3. Upload over USB.
+Then:
+
+1. Open `wiretap_line_bm.ino`.
+2. Select a classic ESP32 DevKit / ESP32-WROOM-32 board and its USB port.
+3. Upload.
 4. Open Serial Monitor at **115200 baud**.
-5. With the receive interface connected safely, observe the controller's normal activity and save the complete console log as a text file.
+5. After measuring the bus and installing the appropriate receive interface, connect BM to the interface input and the interface output to GPIO16.
+6. Observe the OLED and save the serial log.
 
-Example output shape:
+## Interpreting the result
 
-```text
-# Autoheater BM passive wiretap
-# MODE=RX_ONLY; TX is not configured
-# RX_GPIO=16 candidate_baud=25000 format=8N1 frame_gap_us=4000
-t_us=123456 chunk=0 len=4 data=76 01 02 FF
-# stats uptime_ms=10000 bytes=4 chunks=1
-```
+- **Strong positive evidence:** repeated `RX valid` lines; both 24-byte CRCs pass; header/check bytes match; telemetry values are plausible and change consistently with actual heater operation or panel setting. This strongly supports compatibility with the reference protocol.
+- **Inconclusive:** no valid exchanges. Possible causes include wrong electrical interface/polarity, baud/framing, wiring, missing common reference, dropped bytes, different controller traffic timing, or incompatible protocol. This alone does **not** disprove the hypothesis.
+- **Evidence against direct compatibility:** stable, correctly captured waveforms and repeatable traffic at the expected baud, but repeated exchanges fail the reference framing/CRC checks; or valid frames are obtained but the mapped fields are consistently implausible. Preserve the raw waveform and bytes before concluding the protocol differs.
 
-The example bytes above are illustrative only, not a real capture or a known packet.
+The OLED's `Waiting for valid data` screen means only that no accepted exchange has arrived. It is not itself a verdict.
 
 ## First experiment checklist
 
-- [ ] Photograph the connector and record which side is viewed.
-- [ ] Identify GND with power off and confirm with voltage measurements.
-- [ ] Measure BM relative to GND with the controller disconnected/reconnected as appropriate; record off/on idle and peak levels.
-- [ ] Observe BM on a scope/logic analyzer before attaching ESP32.
-- [ ] Verify the interface output never exceeds ESP32 limits and does not load or drive BM.
-- [ ] Record heater/panel state and user action alongside each capture.
-- [ ] Save untouched raw logs; do not edit out bytes or infer packet fields yet.
+- [ ] Photograph the connector and note the viewing orientation.
+- [ ] Confirm GND with power off and meter checks.
+- [ ] Measure BM idle and peak voltage before attaching ESP32.
+- [ ] Capture BM on a scope/logic analyzer and confirm bit timing/polarity.
+- [ ] Verify the interface output stays within ESP32 input limits and does not drive/load BM.
+- [ ] Record heater state and any panel actions alongside the capture.
+- [ ] Save raw serial logs and scope/logic-analyzer captures unchanged.
 
-## Limitations / next step
+## Safety and scope
 
-UART decoding at 25,000 baud is only a first test. If bytes are garbled or absent, use the scope/logic-analyzer trace to determine signal polarity, bit period, framing, and whether this is UART at all. Only then change baud/framing or add a pulse-timing capture path. Do not add transmission until the electrical interface and protocol are understood and explicitly reviewed.
+This is RX-only. Do not add UART TX, send protocol commands, or emulate button presses in this test. ESP32 GPIOs are not 5 V tolerant. Stop if connecting the interface changes the controller's behavior or signal waveform.
