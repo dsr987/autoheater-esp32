@@ -18,7 +18,8 @@
  */
 
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
-#include <Arduino.h>\n#include <stdarg.h>
+#include <Arduino.h>
+#include <stdarg.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -142,7 +143,7 @@ String logSnapshot() {
   const size_t start = (logWriteIndex + LOG_LINES - logLineCount) % LOG_LINES;
   for (size_t i = 0; i < logLineCount; ++i) {
     out += debugLog[(start + i) % LOG_LINES];
-    out += '\\n';
+    out += '\n';
   }
   portEXIT_CRITICAL(&logMux);
   return out;
