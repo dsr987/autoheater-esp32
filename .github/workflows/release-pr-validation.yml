@@ -3,10 +3,6 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
-    paths:
-      - "firmware/app/app.cpp"
-      - "tools/release_automation.py"
-      - ".github/workflows/release-pr-validation.yml"
   workflow_dispatch:
     inputs:
       pr_number:
