@@ -122,7 +122,7 @@ void appendLog(const char *line) {
 }
 
 void logPrintln(const char *line = "") {
-  logPrintln(line);
+  Serial.println(line);
   appendLog(line);
 }
 
