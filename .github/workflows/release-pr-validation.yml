@@ -1,0 +1,43 @@
+name: Validate release metadata
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to validate (manual run)"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate release label and changelog
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
+            export PR_LABELS="$(python3 -c 'import json,sys; print(",".join(x["name"] for x in json.load(open(sys.argv[1])).get("labels", [])))' "$RUNNER_TEMP/pr.json")"
+            export PR_BODY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("body") or "")' "$RUNNER_TEMP/pr.json")"
+          fi
+          python3 tools/release_automation.py validate-pr
