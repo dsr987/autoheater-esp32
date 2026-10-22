@@ -11,14 +11,43 @@
  * BM interface output -> GPIO16 (UART2 RX)
  * OLED: SSD1306 128x64 I2C, SDA=GPIO21, SCL=GPIO22 (change if needed)
  * Serial log: 115200 baud
+ * OTA: Wi-Fi AP Autoheater, http://192.168.4.1/update (bench defaults below)
  *
- * Libraries: Adafruit GFX Library, Adafruit SSD1306
+ * Libraries: Adafruit GFX Library, Adafruit SSD1306, AsyncTCP,
+ * ESPAsyncWebServer, ElegantOTA
  */
 
+#define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 #include <Arduino.h>
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <ElegantOTA.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
+namespace {
+static constexpr char AP_SSID[] = "Autoheater";
+static constexpr char AP_PASSWORD[] = "12345678";  // bench only; change before deployment
+static constexpr char OTA_USERNAME[] = "admin";    // bench only; change before deployment
+static constexpr char OTA_PASSWORD[] = "admin";    // bench only; change before deployment
+AsyncWebServer server(80);
+const char OTA_PAGE[] PROGMEM = R"HTML(
+<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Autoheater ESP32 — Wiretap</title>
+<style>
+body{font:16px system-ui;background:#111827;color:#f3f4f6;max-width:680px;margin:8vh auto;padding:20px}
+main{background:#1f2937;padding:24px;border-radius:14px}a{display:block;padding:13px;background:#2563eb;color:white;text-align:center;border-radius:9px;text-decoration:none}
+p{line-height:1.6;color:#d1d5db}code{overflow-wrap:anywhere}
+</style></head><body><main><h1>Autoheater ESP32 — Wiretap</h1>
+<p>Экспериментальная прошивка пассивного наблюдения линии BM.</p>
+<p>UART работает только на приём. Передача команд отопителю не реализована.</p>
+<p>Обновление прошивки: <code>/update</code></p><a href="/update">Открыть ElegantOTA</a>
+</main></body></html>
+)HTML";
+}
 
 static constexpr int PIN_BM_RX = 16;
 static constexpr int PIN_OLED_SDA = 21;
@@ -117,7 +146,6 @@ void dumpFrame(const uint8_t *p) {
 }
 
 bool parseExchange(const uint8_t *p) {
-  // Reference parser expects controller frame (24 B) then heater response (24 B).
   if ((p[0] != 0x76 && p[0] != 0x78) || p[1] != 0x16 ||
       p[24] != 0x76 || p[25] != 0x16 ||
       p[44] != 100 || p[45] != 0 ||
@@ -127,7 +155,6 @@ bool parseExchange(const uint8_t *p) {
 
   telem.header = p[0];
   telem.demand = p[4];
-  // Telemetry fields below are from the reference component's 48-byte exchange layout.
   const uint8_t receivedState = p[26];
   if (receivedState <= 8) telem.state = receivedState;
   telem.activeError = p[27];
@@ -157,12 +184,9 @@ void acceptByte(uint8_t b, uint32_t nowMs) {
   ++bytesSeen;
   const uint32_t gap = nowMs - lastByteMs;
   lastByteMs = nowMs;
-
-  // Reference protocol frames arrive in an exchange with an idle boundary.
   if (gap > BUS_IDLE_GAP_MS) resetCapture();
 
   if (!frameActive) {
-    // Resynchronize on candidate controller headers.
     if (b == 0x76 || b == 0x78) {
       frame[0] = b;
       frameCount = 1;
@@ -221,6 +245,26 @@ void drawOled() {
   display.display();
 }
 
+void setupOtaWeb() {
+  WiFi.mode(WIFI_AP);
+  if (!WiFi.softAP(AP_SSID, AP_PASSWORD)) {
+    Serial.println("# ERROR: Wi-Fi AP start failed; OTA unavailable.");
+    return;
+  }
+
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send_P(200, "text/html; charset=utf-8", OTA_PAGE);
+  });
+  server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", "{\"ok\":true,\"ota\":\"/update\"}");
+  });
+  ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
+  server.begin();
+
+  Serial.printf("# OTA Wi-Fi: SSID=%s, IP=%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+  Serial.println("# OTA URL: http://192.168.4.1/update ; credentials: admin/admin (bench only)");
+}
+
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(250);
@@ -248,6 +292,7 @@ void setup() {
 
   HeaterSerial.setRxBufferSize(4096);
   HeaterSerial.begin(HEATER_BAUD, SERIAL_8N1, PIN_BM_RX, -1);
+  setupOtaWeb();
 }
 
 void loop() {
@@ -261,4 +306,5 @@ void loop() {
     lastDrawMs = millis();
     drawOled();
   }
+  ElegantOTA.loop();
 }
