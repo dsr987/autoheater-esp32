@@ -44,7 +44,7 @@ jobs:
           arduino-cli lib update-index
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit SSD1306"
-          arduino-cli lib install "AsyncTCP"
+          arduino-cli lib install "Async TCP"
           arduino-cli lib install "ESP Async WebServer"
           arduino-cli lib install "ElegantOTA"
 
