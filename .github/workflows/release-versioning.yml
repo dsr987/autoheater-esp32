@@ -61,7 +61,7 @@ jobs:
           ensure_label "release:none" "C5DEF5" "No firmware release; documentation or automation only"
       - name: Create metadata branch
         id: branch
-        if: ${{ steps.resolve.outputs.process == 'true' }}
+        if: ${{ steps.resolve.outputs.process == 'true' && steps.resolve.outputs.release_type != 'none' && steps.resolve.outputs.release_type != 'already-processed' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::Add a RELEASE_AUTOMATION_TOKEN repository secret with contents and pull-request write access. A PAT is required because GITHUB_TOKEN pushes do not trigger the next push workflow."
+            echo "::error::Add a RELEASE_AUTOMATION_TOKEN repository secret with contents and pull-request write access for actual firmware version releases."
             exit 1
           fi
           git config user.name "github-actions[bot]"
@@ -104,10 +104,10 @@ jobs:
           if [[ -z "$bot_pr" ]]; then
             body="$(cat <<EOF
           Release type: release:none
-          
+
           ## Summary
           - Apply release metadata for merged source PR #${SOURCE_PR}.
-          
+
           ## Changelog
           - Synchronize Autoheater ESP32 version and firmware changelog metadata.
           EOF
