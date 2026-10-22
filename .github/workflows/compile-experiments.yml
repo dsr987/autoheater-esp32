@@ -44,6 +44,9 @@ jobs:
           arduino-cli lib update-index
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit SSD1306"
+          arduino-cli lib install "AsyncTCP"
+          arduino-cli lib install "ESP Async WebServer"
+          arduino-cli lib install "ElegantOTA"
 
       - name: Скомпилировать каждый экспериментальный скетч
         shell: bash
@@ -63,8 +66,6 @@ jobs:
 
             echo "::group::Сборка $ino"
 
-            # Arduino IDE/CLI ожидает, что имя главного .ino совпадает
-            # с именем каталога скетча.
             if [[ "$ino_name" != "$dir_name" ]]; then
               echo "::error file=$ino::Имя файла $ino_name.ino должно совпадать с именем папки $dir_name"
               failed=$((failed + 1))
@@ -79,7 +80,6 @@ jobs:
               --fqbn esp32:esp32:esp32 \
               --output-dir "$output_dir" \
               "$sketch_dir"; then
-              # ESP32 core обычно называет основной образ <имя>.ino.bin.
               compiled_bin="$output_dir/$ino_name.ino.bin"
               if [[ ! -f "$compiled_bin" ]]; then
                 echo "::error file=$ino::Компилятор не создал ожидаемый файл $compiled_bin"
@@ -88,7 +88,6 @@ jobs:
                 continue
               fi
 
-              # Сохраняем BIN рядом с исходным INO, а не только в build/.
               named_bin="$sketch_dir/$ino_name.bin"
               cp "$compiled_bin" "$named_bin"
 
@@ -96,7 +95,6 @@ jobs:
               mkdir -p "$artifact_dir"
               cp "$named_bin" "$artifact_dir/$ino_name.bin"
               echo "Успешно: $sketch_dir/$ino_name.bin"
-
             else
               echo "::error file=$ino::Ошибка компиляции скетча $ino"
               failed=$((failed + 1))
