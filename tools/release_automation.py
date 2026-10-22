@@ -124,14 +124,12 @@ def apply():
             print(f"PR #{number} already processed; idempotent no-op."); return 0
         kind=parse_release_type(os.environ.get("PR_LABELS",""))
         bullets=extract_bullets(os.environ.get("PR_BODY","")); validate_bullets(bullets)
-        state["labels_initialized"]=True
         if kind=="none":
-            state["processed_prs"]=sorted(processed|{number}); state["last_processed_pr"]=number
-            state["last_release_type"]="none"; state["last_version"]=fmt(current_version(APP_CPP.read_text(encoding="utf-8")))
-            STATE_PATH.parent.mkdir(parents=True,exist_ok=True)
-            STATE_PATH.write_text(json.dumps(state,indent=2)+"\n",encoding="utf-8")
-            write_output(release="false",changed="true",version="")
-            print(f"PR #{number}: release:none; version unchanged."); return 0
+            # No source files or shared state need to change for a non-release PR.
+            # In particular, do not trigger the token-protected metadata PR workflow.
+            write_output(release="false",changed="false",version="")
+            print(f"PR #{number}: release:none; version and repository metadata unchanged.")
+            return 0
         text=APP_CPP.read_text(encoding="utf-8")
         old=fmt(current_version(text)); new=fmt(bump(current_version(text),kind))
         text,n1=re.subn(r"(^\s*\*\s*CHANGELOG_VERSION:\s*)\d+\.\d+\.\d+(\s*$)",rf"\g<1>{new}\g<2>",text,count=1,flags=re.MULTILINE)
@@ -146,6 +144,7 @@ def apply():
         text=text[:match.start()]+match.group(1)+lines+match.group(2)+text[match.end():]
         APP_CPP.write_text(text,encoding="utf-8",newline="\n")
         state["processed_prs"]=sorted(processed|{number}); state["release_prs"]=sorted(released|{number})
+        state["labels_initialized"]=True
         state["last_processed_pr"]=number; state["last_release_type"]=kind; state["last_version"]=new
         STATE_PATH.parent.mkdir(parents=True,exist_ok=True); STATE_PATH.write_text(json.dumps(state,indent=2)+"\n",encoding="utf-8")
         write_output(release="true",changed="true",version=new)
