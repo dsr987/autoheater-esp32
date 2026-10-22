@@ -18,7 +18,7 @@
  */
 
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
-#include <Arduino.h>
+#include <Arduino.h>\n#include <stdarg.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -36,16 +36,49 @@ AsyncWebServer server(80);
 const char OTA_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Autoheater ESP32 — Wiretap</title>
+<meta name="theme-color" content="#111827">
+<title>Autoheater — мониторинг BM</title>
 <style>
-body{font:16px system-ui;background:#111827;color:#f3f4f6;max-width:680px;margin:8vh auto;padding:20px}
-main{background:#1f2937;padding:24px;border-radius:14px}a{display:block;padding:13px;background:#2563eb;color:white;text-align:center;border-radius:9px;text-decoration:none}
-p{line-height:1.6;color:#d1d5db}code{overflow-wrap:anywhere}
-</style></head><body><main><h1>Autoheater ESP32 — Wiretap</h1>
-<p>Экспериментальная прошивка пассивного наблюдения линии BM.</p>
-<p>UART работает только на приём. Передача команд отопителю не реализована.</p>
-<p>Обновление прошивки: <code>/update</code></p><a href="/update">Открыть ElegantOTA</a>
-</main></body></html>
+*{box-sizing:border-box}body{font:15px system-ui,sans-serif;background:#0b1120;color:#e5e7eb;max-width:920px;margin:auto;padding:14px}
+h1{font-size:1.35rem;margin:4px 0 8px}.muted{color:#9ca3af}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.card{background:#172033;border:1px solid #2b3850;border-radius:12px;padding:13px;min-width:0}.wide{grid-column:1/-1}.k{font-size:.78rem;color:#9ca3af}.v{font-size:1.15rem;font-weight:650;overflow-wrap:anywhere}
+#logs{font:12px ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:48vh;overflow:auto;background:#080d17;border-radius:8px;padding:10px;min-height:130px}
+a,button{display:inline-block;border:0;border-radius:8px;padding:10px 13px;background:#2563eb;color:white;text-decoration:none;font:inherit}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}.status{font-size:.85rem;color:#9ca3af}
+@media(min-width:620px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.wide{grid-column:1/-1}}
+</style></head><body>
+<header><div><h1>Autoheater ESP32</h1><div class="muted">Пассивный монитор BM · RX only</div></div><a href="/update">OTA</a></header>
+<div class="status" id="conn">Подключение к контроллеру…</div>
+<div class="grid" style="margin-top:12px">
+<div class="card"><div class="k">Связь</div><div class="v" id="link">Ожидание данных</div></div>
+<div class="card"><div class="k">Принято байт</div><div class="v" id="bytes">0</div></div>
+<div class="card"><div class="k">Корректные обмены</div><div class="v" id="valid">0</div></div>
+<div class="card"><div class="k">Отклонённые кадры</div><div class="v" id="bad">0</div></div>
+<div class="card"><div class="k">Состояние</div><div class="v" id="state">—</div></div>
+<div class="card"><div class="k">Ошибка</div><div class="v" id="error">—</div></div>
+<div class="card"><div class="k">Температура камеры</div><div class="v" id="temp">—</div></div>
+<div class="card"><div class="k">Нагрузка / мощность</div><div class="v" id="duty">—</div></div>
+<div class="card"><div class="k">Вентилятор</div><div class="v" id="fan">—</div></div>
+<div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
+<div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
+<div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>Отладочный журнал</strong><button onclick="refreshLogs()">Обновить</button></div><p class="muted">Сообщения соответствуют отладочному выводу Serial Monitor. Журнал хранится в оперативной памяти и очищается после перезапуска.</p><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
+</div>
+<script>
+const el=id=>document.getElementById(id);let lastLogs='';
+async function refreshStatus(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();
+el('conn').textContent='Контроллер доступен · обновление каждую секунду';
+el('bytes').textContent=d.bytes;el('valid').textContent=d.valid;el('bad').textContent=d.bad;
+el('link').textContent=d.have?(d.stale?'Данные устарели':'Кадры получены'):'Нет корректных кадров';
+el('state').textContent=d.have?d.stateText:'—';el('error').textContent=d.have?(d.error+' · '+d.errorText):'—';
+el('temp').textContent=d.have?d.temp+' °C':'—';el('duty').textContent=d.have?d.demand+' / '+d.duty.toFixed(0)+'%':'—';
+el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d.have?d.pump.toFixed(1)+' Гц':'—';
+el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
+}catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
+async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}}catch(e){}}
+refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
+</script></body></html>
 )HTML";
 }
 
@@ -72,6 +105,48 @@ uint32_t lastValidFrameMs = 0;
 uint32_t validFrames = 0;
 uint32_t badFrames = 0;
 uint32_t bytesSeen = 0;
+
+static constexpr size_t LOG_LINES = 80;
+static constexpr size_t LOG_LINE_LEN = 220;
+char debugLog[LOG_LINES][LOG_LINE_LEN] = {};
+size_t logWriteIndex = 0;
+size_t logLineCount = 0;
+portMUX_TYPE logMux = portMUX_INITIALIZER_UNLOCKED;
+
+void appendLog(const char *line) {
+  portENTER_CRITICAL(&logMux);
+  snprintf(debugLog[logWriteIndex], LOG_LINE_LEN, "%s", line);
+  logWriteIndex = (logWriteIndex + 1) % LOG_LINES;
+  if (logLineCount < LOG_LINES) ++logLineCount;
+  portEXIT_CRITICAL(&logMux);
+}
+
+void logPrintln(const char *line = "") {
+  logPrintln(line);
+  appendLog(line);
+}
+
+void logPrintf(const char *format, ...) {
+  char line[LOG_LINE_LEN];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line, sizeof(line), format, args);
+  va_end(args);
+  Serial.print(line);
+  appendLog(line);
+}
+
+String logSnapshot() {
+  String out;
+  portENTER_CRITICAL(&logMux);
+  const size_t start = (logWriteIndex + LOG_LINES - logLineCount) % LOG_LINES;
+  for (size_t i = 0; i < logLineCount; ++i) {
+    out += debugLog[(start + i) % LOG_LINES];
+    out += '\\n';
+  }
+  portEXIT_CRITICAL(&logMux);
+  return out;
+}
 
 struct Telemetry {
   uint8_t header = 0;
@@ -137,12 +212,12 @@ const char *errorText(uint8_t error) {
 }
 
 void dumpFrame(const uint8_t *p) {
-  Serial.printf("RX valid #%lu: ", (unsigned long)validFrames);
+  logPrintf("RX valid #%lu: ", (unsigned long)validFrames);
   for (uint8_t i = 0; i < FRAME_BYTES; ++i) {
     if (i) Serial.write(' ');
-    Serial.printf("%02X", p[i]);
+    logPrintf("%02X", p[i]);
   }
-  Serial.println();
+  logPrintln();
 }
 
 bool parseExchange(const uint8_t *p) {
@@ -168,7 +243,7 @@ bool parseExchange(const uint8_t *p) {
   lastValidFrameMs = millis();
   ++validFrames;
   dumpFrame(p);
-  Serial.printf("DATA state=%s demand=%u duty=%.0f%% pump=%.1fHz fan=%uRPM chamber=%uC error=%u (%s)\n",
+  logPrintf("DATA state=%s demand=%u duty=%.0f%% pump=%.1fHz fan=%uRPM chamber=%uC error=%u (%s)\n",
                 stateText(telem.state), telem.demand, telem.dutyPct,
                 telem.pumpHz, telem.fanRpm, telem.chamberC,
                 telem.error, errorText(telem.error));
@@ -209,7 +284,7 @@ void acceptByte(uint8_t b, uint32_t nowMs) {
   if (frameCount == FRAME_BYTES) {
     if (!parseExchange(frame)) {
       ++badFrames;
-      Serial.printf("RX candidate rejected (header/length/CRC/check bytes); bad=%lu\n",
+      logPrintf("RX candidate rejected (header/length/CRC/check bytes); bad=%lu\n",
                     (unsigned long)badFrames);
     }
     resetCapture();
@@ -248,7 +323,7 @@ void drawOled() {
 void setupOtaWeb() {
   WiFi.mode(WIFI_AP);
   if (!WiFi.softAP(AP_SSID, AP_PASSWORD)) {
-    Serial.println("# ERROR: Wi-Fi AP start failed; OTA unavailable.");
+    logPrintln("# ERROR: Wi-Fi AP start failed; OTA unavailable.");
     return;
   }
 
@@ -258,28 +333,46 @@ void setupOtaWeb() {
   server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send(200, "application/json", "{\"ok\":true,\"ota\":\"/update\"}");
   });
+  server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+    const bool stale = haveTelemetry && (millis() - lastValidFrameMs > 15000);
+    char json[900];
+    snprintf(json, sizeof(json),
+      "{\\"have\\":%s,\\"stale\\":%s,\\"bytes\\":%lu,\\"valid\\":%lu,\\"bad\\":%lu,"
+      "\\"header\\":%u,\\"state\\":%u,\\"stateText\\":\\"%s\\",\\"error\\":%u,\\"errorText\\":\\"%s\\","
+      "\\"temp\\":%u,\\"demand\\":%u,\\"duty\\":%.2f,\\"fan\\":%u,\\"pump\\":%.1f,\\"age\\":%lu}",
+      haveTelemetry ? "true" : "false", stale ? "true" : "false",
+      (unsigned long)bytesSeen, (unsigned long)validFrames, (unsigned long)badFrames,
+      telem.header, telem.state, stateText(telem.state), telem.error, errorText(telem.error),
+      telem.chamberC, telem.demand, isnan(telem.dutyPct) ? 0.0 : telem.dutyPct,
+      telem.fanRpm, isnan(telem.pumpHz) ? 0.0 : telem.pumpHz,
+      haveTelemetry ? (unsigned long)((millis() - lastValidFrameMs) / 1000) : 0UL);
+    request->send(200, "application/json; charset=utf-8", json);
+  });
+  server.on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain; charset=utf-8", logSnapshot());
+  });
   ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
   server.begin();
 
-  Serial.printf("# OTA Wi-Fi: SSID=%s, IP=%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
-  Serial.println("# OTA URL: http://192.168.4.1/update ; credentials: admin/admin (bench only)");
+  logPrintf("# OTA Wi-Fi: SSID=%s, IP=%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+  logPrintln("# OTA URL: http://192.168.4.1/update ; credentials: admin/admin (bench only)");
 }
 
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(250);
-  Serial.println();
-  Serial.println("# Autoheater compatibility hypothesis wiretap");
-  Serial.println("# PASSIVE RX ONLY: no TX configured, no heater commands.");
-  Serial.printf("# UART2 RX GPIO%d, candidate %lu baud 8N1; OLED SDA=%d SCL=%d\n",
+  logPrintln();
+  logPrintln("# Autoheater compatibility hypothesis wiretap");
+  logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
+  logPrintf("# UART2 RX GPIO%d, candidate %lu baud 8N1; OLED SDA=%d SCL=%d\n",
                 PIN_BM_RX, (unsigned long)HEATER_BAUD, PIN_OLED_SDA, PIN_OLED_SCL);
-  Serial.println("# Parser checks 48-byte exchange, 0x76/0x78 headers, 0x16 markers, CRC16/Modbus.");
-  Serial.println("# No valid frames does NOT by itself disprove protocol compatibility.");
+  logPrintln("# Parser checks 48-byte exchange, 0x76/0x78 headers, 0x16 markers, CRC16/Modbus.");
+  logPrintln("# No valid frames does NOT by itself disprove protocol compatibility.");
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
   oledReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   if (!oledReady) {
-    Serial.println("# OLED not found at 0x3C; serial parser remains active.");
+    logPrintln("# OLED not found at 0x3C; serial parser remains active.");
   } else {
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
