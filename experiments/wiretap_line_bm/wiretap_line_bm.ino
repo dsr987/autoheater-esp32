@@ -338,9 +338,9 @@ void setupOtaWeb() {
     const bool stale = haveTelemetry && (millis() - lastValidFrameMs > 15000);
     char json[900];
     snprintf(json, sizeof(json),
-      "{\\"have\\":%s,\\"stale\\":%s,\\"bytes\\":%lu,\\"valid\\":%lu,\\"bad\\":%lu,"
-      "\\"header\\":%u,\\"state\\":%u,\\"stateText\\":\\"%s\\",\\"error\\":%u,\\"errorText\\":\\"%s\\","
-      "\\"temp\\":%u,\\"demand\\":%u,\\"duty\\":%.2f,\\"fan\\":%u,\\"pump\\":%.1f,\\"age\\":%lu}",
+      "{\"have\":%s,\"stale\":%s,\"bytes\":%lu,\"valid\":%lu,\"bad\":%lu,"
+      "\"header\":%u,\"state\":%u,\"stateText\":\"%s\",\"error\":%u,\"errorText\":\"%s\","
+      "\"temp\":%u,\"demand\":%u,\"duty\":%.2f,\"fan\":%u,\"pump\":%.1f,\"age\":%lu}",
       haveTelemetry ? "true" : "false", stale ? "true" : "false",
       (unsigned long)bytesSeen, (unsigned long)validFrames, (unsigned long)badFrames,
       telem.header, telem.state, stateText(telem.state), telem.error, errorText(telem.error),
