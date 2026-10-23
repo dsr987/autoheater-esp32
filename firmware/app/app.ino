@@ -19,7 +19,6 @@
 
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 #include <Arduino.h>
-#include <LittleFS.h>
 #include <stdarg.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -34,11 +33,9 @@ static constexpr char AP_SSID[] = "Autoheater";
 static constexpr char AP_PASSWORD[] = "12345678";  // bench only; change before deployment
 static constexpr char OTA_USERNAME[] = "admin";    // bench only; change before deployment
 static constexpr char OTA_PASSWORD[] = "admin";    // bench only; change before deployment
-static constexpr char LOG_PATH[] = "/wiretap.log";
 static constexpr size_t RAM_LOG_LINES = 100;
 static constexpr size_t RAM_LOG_LINE_LEN = 260;
 static constexpr size_t RAW_CHUNK_BYTES = 24;
-static constexpr size_t LOG_STAGE_BYTES = 3072;
 AsyncWebServer server(80);
 const char OTA_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -69,7 +66,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 <div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
 <div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
 <div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
-<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Полный журнал сохраняется в LittleFS и переживает перезапуск. В него входят сырые байты UART в HEX, временные отметки, найденные кандидаты, CRC и расшифрованные поля. Скачивайте файл периодически.</p><div class="muted" id="logInfo">Размер журнала: —</div><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Журнал хранится в оперативной памяти (последние 100 строк). При перезапуске он очищается. Скачайте TXT, чтобы сохранить данные.</p><div id="logs">Ожидание журнала…</div></div>
 <div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
 </div>
 <script>
@@ -83,9 +80,9 @@ el('temp').textContent=d.have?d.temp+' °C':'—';el('duty').textContent=d.have?
 el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d.have?d.pump.toFixed(1)+' Гц':'—';
 el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
 }catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
-async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}const info=await fetch('/api/log-info',{cache:'no-store'});if(info.ok){const d=await info.json();el('logInfo').textContent='Файл: '+d.bytes+' байт · LittleFS: '+(d.mounted?'подключена':'НЕ подключена')+(d.exists?'':' · файл не найден')+' · свободно '+d.free+' из '+d.total+' байт'+(d.full?' · достигнут предел записи':'')+(d.error?' · '+d.error:'');}}catch(e){el('logInfo').textContent='Ошибка чтения журнала: '+e.message;}}
+async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}}catch(e){el('logs').textContent='Ошибка чтения журнала: '+e.message;}}
 function downloadLog(){window.location.href='/download-log?ts='+Date.now();}
-async function clearLog(){if(!confirm('Удалить сохранённый журнал и начать новый?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error((await r.text())||r.status);await new Promise(resolve=>setTimeout(resolve,400));lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
+async function clearLog(){if(!confirm('Очистить журнал в оперативной памяти?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error((await r.text())||r.status);lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
 refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
 </script></body></html>
 )HTML";
@@ -124,27 +121,11 @@ char debugLog[RAM_LOG_LINES][RAM_LOG_LINE_LEN] = {};
 size_t logWriteIndex = 0;
 size_t logLineCount = 0;
 portMUX_TYPE logMux = portMUX_INITIALIZER_UNLOCKED;
-char pendingFileLog[LOG_STAGE_BYTES] = {};
-size_t pendingFileLogLength = 0;
-bool fileLogReady = false;
-bool fileLogFull = false;
 volatile bool clearLogRequested = false;
 uint8_t rawChunk[RAW_CHUNK_BYTES] = {};
 size_t rawChunkCount = 0;
 uint32_t rawChunkStartMs = 0;
 uint32_t rawChunkGapMs = 0;
-
-void flushPersistentLog() {
-  if (!fileLogReady || pendingFileLogLength == 0 || fileLogFull) return;
-  const size_t total = LittleFS.totalBytes();
-  if (total == 0 || LittleFS.usedBytes() + pendingFileLogLength > total - 4096) { fileLogFull = true; return; }
-  File file = LittleFS.open(LOG_PATH, FILE_APPEND);
-  if (!file) { fileLogFull = true; return; }
-  const size_t written = file.write(reinterpret_cast<const uint8_t *>(pendingFileLog), pendingFileLogLength);
-  file.close();
-  if (written != pendingFileLogLength) { fileLogFull = true; return; }
-  pendingFileLogLength = 0; pendingFileLog[0] = '\0';
-}
 
 void appendLog(const char *line) {
   char clean[RAM_LOG_LINE_LEN]; snprintf(clean, sizeof(clean), "%s", line);
@@ -155,13 +136,6 @@ void appendLog(const char *line) {
   logWriteIndex = (logWriteIndex + 1) % RAM_LOG_LINES;
   if (logLineCount < RAM_LOG_LINES) ++logLineCount;
   portEXIT_CRITICAL(&logMux);
-  if (!fileLogReady || fileLogFull || n == 0) return;
-  const size_t needed = n + 1;
-  if (pendingFileLogLength + needed >= LOG_STAGE_BYTES) flushPersistentLog();
-  if (pendingFileLogLength + needed < LOG_STAGE_BYTES) {
-    memcpy(pendingFileLog + pendingFileLogLength, clean, n); pendingFileLogLength += n;
-    pendingFileLog[pendingFileLogLength++] = '\n'; pendingFileLog[pendingFileLogLength] = '\0';
-  } else fileLogFull = true;
 }
 
 void logPrintln(const char *line = "") { Serial.println(line); appendLog(line); }
@@ -175,24 +149,6 @@ String logSnapshot() {
   const size_t first = (logWriteIndex + RAM_LOG_LINES - logLineCount) % RAM_LOG_LINES;
   for (size_t i = 0; i < logLineCount; ++i) { out += debugLog[(first + i) % RAM_LOG_LINES]; out += '\n'; }
   portEXIT_CRITICAL(&logMux); return out;
-}
-
-void beginPersistentLog() {
-  fileLogReady = LittleFS.begin(false);
-  if (!fileLogReady) { Serial.println("# ERROR: LittleFS mount failed; persistent log unavailable."); return; }
-  if (!LittleFS.exists(LOG_PATH)) { File file = LittleFS.open(LOG_PATH, FILE_WRITE); if (file) file.close(); }
-  fileLogReady = LittleFS.exists(LOG_PATH);
-  if (fileLogReady) { File file = LittleFS.open(LOG_PATH, FILE_APPEND); if (file) { file.printf("\n===== BOOT millis=%lu =====\n", (unsigned long)millis()); file.close(); } }
-}
-
-void clearPersistentLog() {
-  if (!fileLogReady) return;
-  pendingFileLogLength = 0; pendingFileLog[0] = '\0'; fileLogFull = false; rawChunkCount = 0;
-  portENTER_CRITICAL(&logMux);
-  logWriteIndex = 0; logLineCount = 0;
-  portEXIT_CRITICAL(&logMux);
-  File file = LittleFS.open(LOG_PATH, FILE_WRITE);
-  if (file) { file.println("# Log cleared from web UI"); file.close(); } else fileLogFull = true;
 }
 
 void flushRawChunk() {
@@ -406,34 +362,15 @@ void setupOtaWeb() {
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
   });
   server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
-    // Always make a downloadable text log available. If LittleFS cannot be
-    // mounted, fall back to the RAM ring buffer instead of returning HTTP 503.
-    if (fileLogReady && LittleFS.exists(LOG_PATH)) {
-      flushPersistentLog();
-      AsyncWebServerResponse *response = request->beginResponse(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
-      response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-      response->addHeader("Content-Disposition", "attachment; filename=wiretap.log.txt");
-      request->send(response);
-      return;
-    }
-    String snapshot = String("# WARNING: LittleFS unavailable; this download contains only the recent RAM log (up to 100 lines).\n") + logSnapshot();
+    String snapshot = logSnapshot();
     AsyncWebServerResponse *response = request->beginResponse(200, "text/plain; charset=utf-8", snapshot);
     response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram-fallback.txt");
+    response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram.log.txt");
     request->send(response);
   });
-  server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
-    size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
-    char json[320];
-    const bool exists = fileLogReady && LittleFS.exists(LOG_PATH);
-    const char *error = !fileLogReady ? "LittleFS mount or log file unavailable" : (fileLogFull ? "Log storage full or write failed" : "");
-    snprintf(json, sizeof(json), "{\"mounted\":%s,\"exists\":%s,\"bytes\":%lu,\"total\":%lu,\"free\":%lu,\"full\":%s,\"error\":\"%s\"}", fileLogReady ? "true" : "false", exists ? "true" : "false", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false", error);
-    request->send(200, "application/json; charset=utf-8", json);
-  });
   server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
-    if (!fileLogReady) { request->send(503, "text/plain; charset=utf-8", "Persistent log unavailable"); return; }
     clearLogRequested = true;
-    request->send(202, "text/plain; charset=utf-8", "Log clear queued");
+    request->send(202, "text/plain; charset=utf-8", "RAM log clear queued");
   });
   ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
   server.begin();
@@ -445,7 +382,6 @@ void setupOtaWeb() {
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(250);
-  beginPersistentLog();
   logPrintln();
   logPrintln("# Autoheater compatibility hypothesis wiretap");
   logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
@@ -474,7 +410,6 @@ void setup() {
   baudStartedMs = millis();
   HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
   logPrintf("# BAUD_SCAN_START baud=%lu dwell_ms=%lu\n", (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS);
-  logPrintf("# LittleFS persistent log: %s, file=%s\n", fileLogReady ? "ready" : "UNAVAILABLE", LOG_PATH);
   setupOtaWeb();
 }
 
@@ -496,7 +431,15 @@ void loop() {
       (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS,
       (unsigned long)bytesSeen, (unsigned long)validFrames, (unsigned long)badFrames);
   }
-  if (clearLogRequested) { clearLogRequested = false; clearPersistentLog(); logPrintln("# Log cleared from web UI"); }
+  if (clearLogRequested) {
+    clearLogRequested = false;
+    portENTER_CRITICAL(&logMux);
+    logWriteIndex = 0;
+    logLineCount = 0;
+    portEXIT_CRITICAL(&logMux);
+    rawChunkCount = 0;
+    logPrintln("# RAM log cleared from web UI");
+  }
   while (HeaterSerial.available() > 0) {
     const int b = HeaterSerial.read();
     if (b >= 0) acceptByte(uint8_t(b), millis());
@@ -504,7 +447,7 @@ void loop() {
 
   static uint32_t lastDrawMs = 0;
   if (millis() - lastDrawMs >= 500) {
-    lastDrawMs = millis(); drawOled(); flushRawChunk(); flushPersistentLog();
+    lastDrawMs = millis(); drawOled(); flushRawChunk();
   }
   ElegantOTA.loop();
 }
