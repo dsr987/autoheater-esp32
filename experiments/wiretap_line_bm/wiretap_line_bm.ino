@@ -258,21 +258,21 @@ const char *errorText(uint8_t error) {
   }
 }
 
-void dumpFrame(const uint8_t *p) {
-  logPrintf("RX valid #%lu: ", (unsigned long)validFrames);
-  for (uint8_t i = 0; i < FRAME_BYTES; ++i) {
-    if (i) Serial.write(' ');
-    logPrintf("%02X", p[i]);
-  }
-  logPrintln();
+void dumpFrame(const char *label, const uint8_t *p) {
+  char line[RAM_LOG_LINE_LEN]; int used = snprintf(line, sizeof(line), "%s", label);
+  for (uint8_t i = 0; i < FRAME_BYTES && used > 0 && size_t(used) < sizeof(line) - 4; ++i) used += snprintf(line + used, sizeof(line) - size_t(used), " %02X", p[i]);
+  logPrintln(line);
+}
+
+void logCrcDetails(const uint8_t *p) {
+  const uint16_t c0 = crc16Modbus(p, 22), c1 = crc16Modbus(p + 24, 22);
+  logPrintf("CRC block0 calc=%04X rx=%02X%02X valid=%s; block1 calc=%04X rx=%02X%02X valid=%s\n", c0, p[22], p[23], crcValid(p) ? "yes" : "NO", c1, p[46], p[47], crcValid(p + 24) ? "yes" : "NO");
 }
 
 bool parseExchange(const uint8_t *p) {
-  if ((p[0] != 0x76 && p[0] != 0x78) || p[1] != 0x16 ||
-      p[24] != 0x76 || p[25] != 0x16 ||
-      p[44] != 100 || p[45] != 0 ||
-      !crcValid(p) || !crcValid(p + 24)) {
-    return false;
+  if ((p[0] != 0x76 && p[0] != 0x78) || p[1] != 0x16 || p[24] != 0x76 || p[25] != 0x16 || p[44] != 100 || p[45] != 0 || !crcValid(p) || !crcValid(p + 24)) {
+    logPrintf("REJECT ms=%lu hdr=%02X%02X second=%02X%02X trailer=%u,%u\n", (unsigned long)millis(), p[0], p[1], p[24], p[25], p[44], p[45]);
+    logCrcDetails(p); dumpFrame("CANDIDATE HEX:", p); return false;
   }
 
   telem.header = p[0];
@@ -289,11 +289,8 @@ bool parseExchange(const uint8_t *p) {
   haveTelemetry = true;
   lastValidFrameMs = millis();
   ++validFrames;
-  dumpFrame(p);
-  logPrintf("DATA state=%s demand=%u duty=%.0f%% pump=%.1fHz fan=%uRPM chamber=%uC error=%u (%s)\n",
-                stateText(telem.state), telem.demand, telem.dutyPct,
-                telem.pumpHz, telem.fanRpm, telem.chamberC,
-                telem.error, errorText(telem.error));
+  dumpFrame("VALID HEX:", p);
+  logPrintf("DATA ms=%lu state_raw=%u state=%s active_error=%u demand_raw=%u duty_calc=%.1f%% pump_raw=%u pump=%.1fHz fan_raw=%u,%u fan=%uRPM chamber_raw=%u,%u chamber=%uC error=%u (%s)\n", (unsigned long)millis(), telem.state, stateText(telem.state), telem.activeError, telem.demand, telem.dutyPct, p[40], telem.pumpHz, p[30], p[31], telem.fanRpm, p[34], p[35], telem.chamberC, telem.error, errorText(telem.error));
   return true;
 }
 
@@ -303,10 +300,9 @@ void resetCapture() {
 }
 
 void acceptByte(uint8_t b, uint32_t nowMs) {
-  ++bytesSeen;
-  const uint32_t gap = nowMs - lastByteMs;
-  lastByteMs = nowMs;
-  if (gap > BUS_IDLE_GAP_MS) resetCapture();
+  ++bytesSeen; const uint32_t gap = nowMs - lastByteMs; lastByteMs = nowMs;
+  if (gap > BUS_IDLE_GAP_MS) { flushRawChunk(); logPrintf("UART_GAP ms=%lu gap_ms=%lu bytes_total=%lu partial_candidate=%u\n", (unsigned long)nowMs, (unsigned long)gap, (unsigned long)bytesSeen, frameActive ? frameCount : 0); resetCapture(); }
+  recordRawByte(b, nowMs, gap);
 
   if (!frameActive) {
     if (b == 0x76 || b == 0x78) {
@@ -396,7 +392,21 @@ void setupOtaWeb() {
     request->send(200, "application/json; charset=utf-8", json);
   });
   server.on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request) {
+    flushRawChunk(); flushPersistentLog();
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
+  });
+  server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
+    flushRawChunk(); flushPersistentLog();
+    if (!fileLogReady || !LittleFS.exists(LOG_PATH)) { request->send(500, "text/plain; charset=utf-8", "Persistent log unavailable"); return; }
+    request->send(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
+  });
+  server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
+    size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
+    char json[180]; snprintf(json, sizeof(json), "{\\"bytes\\":%lu,\\"total\\":%lu,\\"free\\":%lu,\\"full\\":%s}", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false");
+    request->send(200, "application/json; charset=utf-8", json);
+  });
+  server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
+    clearPersistentLog(); request->send(fileLogReady ? 200 : 500, "text/plain; charset=utf-8", fileLogReady ? "Log cleared" : "Persistent log unavailable");
   });
   ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
   server.begin();
@@ -408,6 +418,7 @@ void setupOtaWeb() {
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(250);
+  beginPersistentLog();
   logPrintln();
   logPrintln("# Autoheater compatibility hypothesis wiretap");
   logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
@@ -432,6 +443,7 @@ void setup() {
 
   HeaterSerial.setRxBufferSize(4096);
   HeaterSerial.begin(HEATER_BAUD, SERIAL_8N1, PIN_BM_RX, -1);
+  logPrintf("# LittleFS persistent log: %s, file=%s\n", fileLogReady ? "ready" : "UNAVAILABLE", LOG_PATH);
   setupOtaWeb();
 }
 
@@ -443,8 +455,7 @@ void loop() {
 
   static uint32_t lastDrawMs = 0;
   if (millis() - lastDrawMs >= 500) {
-    lastDrawMs = millis();
-    drawOled();
+    lastDrawMs = millis(); drawOled(); flushRawChunk(); flushPersistentLog();
   }
   ElegantOTA.loop();
 }
