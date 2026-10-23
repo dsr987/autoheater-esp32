@@ -473,7 +473,7 @@ void setup() {
   baudIndex = 0;
   baudStartedMs = millis();
   HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
-  logPrintf("# BAUD_SCAN_START baud=%lu dwell_ms=%lu\\n", (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS);
+  logPrintf("# BAUD_SCAN_START baud=%lu dwell_ms=%lu\n", (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS);
   logPrintf("# LittleFS persistent log: %s, file=%s\n", fileLogReady ? "ready" : "UNAVAILABLE", LOG_PATH);
   setupOtaWeb();
 }
@@ -492,7 +492,7 @@ void loop() {
     HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
     baudStartedMs = millis();
     lastByteMs = baudStartedMs;
-    logPrintf("# BAUD_SCAN baud=%lu dwell_ms=%lu total_bytes=%lu valid=%lu rejected=%lu\\n",
+    logPrintf("# BAUD_SCAN baud=%lu dwell_ms=%lu total_bytes=%lu valid=%lu rejected=%lu\n",
       (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS,
       (unsigned long)bytesSeen, (unsigned long)validFrames, (unsigned long)badFrames);
   }
