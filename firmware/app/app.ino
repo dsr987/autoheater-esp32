@@ -66,7 +66,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 <div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
 <div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
 <div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
-<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Журнал хранится в оперативной памяти (последние 100 строк). При перезапуске он очищается. Скачайте TXT, чтобы сохранить данные.</p><div class="muted" id="logInfo">Размер журнала: —</div><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Журнал хранится в оперативной памяти (последние 100 строк). При перезапуске он очищается. Скачайте TXT, чтобы сохранить данные.</p><div id="logs">Ожидание журнала…</div></div>
 <div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
 </div>
 <script>
