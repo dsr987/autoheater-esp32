@@ -26,18 +26,20 @@ jobs:
           python-version: "3.12"
       - name: Validate release label and changelog
         env:
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          PR_BODY: ${{ github.event.pull_request.body }}
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           REPOSITORY: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
-            export PR_LABELS="$(python3 -c 'import json,sys; print(",".join(x["name"] for x in json.load(open(sys.argv[1])).get("labels", [])))' "$RUNNER_TEMP/pr.json")"
-            export PR_BODY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("body") or "")' "$RUNNER_TEMP/pr.json")"
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            echo "::error::PR_NUMBER is required for both pull_request and workflow_dispatch events."
+            exit 1
           fi
+          # Read labels/body from the GitHub API for both event types. This avoids
+          # relying on pull_request.labels expression expansion, which may be empty.
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
+          export PR_LABELS="$(python3 -c 'import json,sys; print(",".join(x["name"] for x in json.load(open(sys.argv[1])).get("labels", [])))' "$RUNNER_TEMP/pr.json")"
+          export PR_BODY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("body") or "")' "$RUNNER_TEMP/pr.json")"
+          echo "Validating PR #$PR_NUMBER; release labels: ${PR_LABELS:-<none>}"
           python3 tools/release_automation.py validate-pr
