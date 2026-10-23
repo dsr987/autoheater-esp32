@@ -83,8 +83,8 @@ el('temp').textContent=d.have?d.temp+' °C':'—';el('duty').textContent=d.have?
 el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d.have?d.pump.toFixed(1)+' Гц':'—';
 el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
 }catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
-async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}const info=await fetch('/api/log-info',{cache:'no-store'});if(info.ok){const d=await info.json();el('logInfo').textContent='Файл: '+d.bytes+' байт · LittleFS: свободно '+d.free+' из '+d.total+' байт'+(d.full?' · достигнут предел записи':'');}}catch(e){}}
-async function downloadLog(){try{const r=await fetch('/download-log',{cache:'no-store'});if(!r.ok)throw Error((await r.text())||r.status);const blob=await r.blob();if(!blob.size)throw Error('Файл пуст');const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='wiretap.log.txt';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){alert('Не удалось скачать лог: '+e.message);}}
+async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}const info=await fetch('/api/log-info',{cache:'no-store'});if(info.ok){const d=await info.json();el('logInfo').textContent='Файл: '+d.bytes+' байт · LittleFS: '+(d.mounted?'подключена':'НЕ подключена')+(d.exists?'':' · файл не найден')+' · свободно '+d.free+' из '+d.total+' байт'+(d.full?' · достигнут предел записи':'')+(d.error?' · '+d.error:'');}}catch(e){el('logInfo').textContent='Ошибка чтения журнала: '+e.message;}}
+function downloadLog(){window.location.href='/download-log?ts='+Date.now();}
 async function clearLog(){if(!confirm('Удалить сохранённый журнал и начать новый?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error((await r.text())||r.status);await new Promise(resolve=>setTimeout(resolve,400));lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
 refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
 </script></body></html>
@@ -401,10 +401,20 @@ void setupOtaWeb() {
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
   });
   server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (!fileLogReady || !LittleFS.exists(LOG_PATH)) { request->send(503, "text/plain; charset=utf-8", "Persistent log unavailable; check LittleFS status on the page"); return; }
-    AsyncWebServerResponse *response = request->beginResponse(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
-    response->addHeader("Cache-Control", "no-store");
-    response->addHeader("Content-Disposition", "attachment; filename=wiretap.log.txt");
+    // Always make a downloadable text log available. If LittleFS cannot be
+    // mounted, fall back to the RAM ring buffer instead of returning HTTP 503.
+    if (fileLogReady && LittleFS.exists(LOG_PATH)) {
+      flushPersistentLog();
+      AsyncWebServerResponse *response = request->beginResponse(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
+      response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      response->addHeader("Content-Disposition", "attachment; filename=wiretap.log.txt");
+      request->send(response);
+      return;
+    }
+    String snapshot = String("# WARNING: LittleFS unavailable; this download contains only the recent RAM log (up to 100 lines).\\n") + logSnapshot();
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain; charset=utf-8", snapshot);
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram-fallback.txt");
     request->send(response);
   });
   server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
