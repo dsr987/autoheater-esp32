@@ -2,12 +2,14 @@
   "schema_version": 1,
   "labels_initialized": true,
   "processed_prs": [
-    12
+    12,
+    14
   ],
   "release_prs": [
-    12
+    12,
+    14
   ],
-  "last_processed_pr": 12,
-  "last_release_type": "minor",
-  "last_version": "0.2.0"
+  "last_processed_pr": 14,
+  "last_release_type": "patch",
+  "last_version": "0.2.1"
 }
