@@ -364,7 +364,17 @@ void setupOtaWeb() {
     response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram.log.txt");
     request->send(response);
   });
-  server.on("/api/log/mark/up", HTTP_POST, [](AsyncWebServerRequest *request) {\n    logPrintf("# BUTTON_MARK direction=UP ms=%lu\\n", (unsigned long)millis());\n    request->send(200, "text/plain; charset=utf-8", "UP marker added");\n  });\n  server.on("/api/log/mark/down", HTTP_POST, [](AsyncWebServerRequest *request) {\n    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\\n", (unsigned long)millis());\n    request->send(200, "text/plain; charset=utf-8", "DOWN marker added");\n  });\n  server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
+  server.on("/api/log/mark/up", HTTP_POST, [](AsyncWebServerRequest *request) {
+    logPrintf("# BUTTON_MARK direction=UP ms=%lu\
+", (unsigned long)millis());
+    request->send(200, "text/plain; charset=utf-8", "UP marker added");
+  });
+  server.on("/api/log/mark/down", HTTP_POST, [](AsyncWebServerRequest *request) {
+    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\
+", (unsigned long)millis());
+    request->send(200, "text/plain; charset=utf-8", "DOWN marker added");
+  });
+  server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
     clearLogRequested = true;
     request->send(202, "text/plain; charset=utf-8", "RAM log clear queued");
   });
