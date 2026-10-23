@@ -95,7 +95,9 @@ static constexpr int PIN_BM_RX = 16;
 static constexpr int PIN_OLED_SDA = 21;
 static constexpr int PIN_OLED_SCL = 22;
 static constexpr uint32_t CONSOLE_BAUD = 115200;
-static constexpr uint32_t HEATER_BAUD = 25000;  // candidate, source-project setting
+static constexpr uint32_t HEATER_BAUDS[] = {25000, 9600, 4800, 2400};
+static constexpr size_t HEATER_BAUD_COUNT = sizeof(HEATER_BAUDS) / sizeof(HEATER_BAUDS[0]);
+static constexpr uint32_t BAUD_DWELL_MS = 12000;  // one rate per 12 s
 static constexpr uint32_t BUS_IDLE_GAP_MS = 100;
 static constexpr uint8_t FRAME_BYTES = 48;
 static constexpr uint8_t OLED_WIDTH = 128;
@@ -114,6 +116,9 @@ uint32_t lastValidFrameMs = 0;
 uint32_t validFrames = 0;
 uint32_t badFrames = 0;
 uint32_t bytesSeen = 0;
+uint32_t activeBaud = HEATER_BAUDS[0];
+uint32_t baudStartedMs = 0;
+size_t baudIndex = 0;
 
 char debugLog[RAM_LOG_LINES][RAM_LOG_LINE_LEN] = {};
 size_t logWriteIndex = 0;
@@ -192,7 +197,7 @@ void clearPersistentLog() {
 
 void flushRawChunk() {
   if (rawChunkCount == 0) return; char line[250];
-  int used = snprintf(line, sizeof(line), "RAW ms=%lu gap_ms=%lu n=%u hex=", (unsigned long)rawChunkStartMs, (unsigned long)rawChunkGapMs, (unsigned)rawChunkCount);
+  int used = snprintf(line, sizeof(line), "RAW baud=%lu ms=%lu gap_ms=%lu n=%u hex=", (unsigned long)activeBaud, (unsigned long)rawChunkStartMs, (unsigned long)rawChunkGapMs, (unsigned)rawChunkCount);
   for (size_t i = 0; i < rawChunkCount && used > 0 && size_t(used) < sizeof(line) - 4; ++i) used += snprintf(line + used, sizeof(line) - size_t(used), "%02X%s", rawChunk[i], (i + 1 == rawChunkCount) ? "" : " ");
   logPrintln(line); rawChunkCount = 0;
 }
@@ -464,12 +469,33 @@ void setup() {
   }
 
   HeaterSerial.setRxBufferSize(4096);
-  HeaterSerial.begin(HEATER_BAUD, SERIAL_8N1, PIN_BM_RX, -1);
+  activeBaud = HEATER_BAUDS[0];
+  baudIndex = 0;
+  baudStartedMs = millis();
+  HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
+  logPrintf("# BAUD_SCAN_START baud=%lu dwell_ms=%lu\\n", (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS);
   logPrintf("# LittleFS persistent log: %s, file=%s\n", fileLogReady ? "ready" : "UNAVAILABLE", LOG_PATH);
   setupOtaWeb();
 }
 
 void loop() {
+  // Passive baud-rate sweep: no TX pin is configured. Discard the partial
+  // candidate at each rate change so bytes from different decoders cannot mix.
+  if (millis() - baudStartedMs >= BAUD_DWELL_MS) {
+    flushRawChunk();
+    resetCapture();
+    while (HeaterSerial.available() > 0) HeaterSerial.read();
+    baudIndex = (baudIndex + 1) % HEATER_BAUD_COUNT;
+    activeBaud = HEATER_BAUDS[baudIndex];
+    HeaterSerial.end();
+    delay(2);
+    HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
+    baudStartedMs = millis();
+    lastByteMs = baudStartedMs;
+    logPrintf("# BAUD_SCAN baud=%lu dwell_ms=%lu total_bytes=%lu valid=%lu rejected=%lu\\n",
+      (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS,
+      (unsigned long)bytesSeen, (unsigned long)validFrames, (unsigned long)badFrames);
+  }
   if (clearLogRequested) { clearLogRequested = false; clearPersistentLog(); logPrintln("# Log cleared from web UI"); }
   while (HeaterSerial.available() > 0) {
     const int b = HeaterSerial.read();
