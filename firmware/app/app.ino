@@ -21,6 +21,7 @@
 #include <Arduino.h>
 #include <stdarg.h>
 #include <WiFi.h>
+#include <LittleFS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
@@ -36,6 +37,10 @@ static constexpr char OTA_PASSWORD[] = "admin";    // bench only; change before 
 static constexpr size_t RAM_LOG_LINES = 100;
 static constexpr size_t RAM_LOG_LINE_LEN = 260;
 static constexpr size_t RAW_CHUNK_BYTES = 24;
+static constexpr size_t PERSIST_LOG_MAX_BYTES = 256 * 1024;
+static constexpr size_t PERSIST_PENDING_BYTES = 4096;
+static constexpr char PERSIST_LOG_PATH[] = "/wiretap.log";
+static constexpr char PERSIST_LOG_OLD_PATH[] = "/wiretap.log.1";
 AsyncWebServer server(80);
 const char OTA_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -66,7 +71,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 <div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
 <div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
 <div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
-<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="markButton('UP')" style="background:#15803d">Метка ↑ Вверх</button><button onclick="markButton('DOWN')" style="background:#b45309">Метка ↓ Вниз</button><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Журнал хранится в оперативной памяти (последние 100 строк). При перезапуске он очищается. Скачайте TXT, чтобы сохранить данные.</p><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="markButton('UP')" style="background:#15803d">Метка ↑ Вверх</button><button onclick="markButton('DOWN')" style="background:#b45309">Метка ↓ Вниз</button><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать журнал</button><button onclick="window.location.href='/download-log-previous'">Архив</button><button onclick="window.location.href='/download-log-ram'">RAM TXT</button><button onclick="clearLog()">Очистить RAM</button></div></div><p class="muted">Полный журнал сохраняется во flash ESP32 (до 256 КиБ + один архивный сегмент). Сохранение пакетное, примерно раз в секунду. Очистка RAM не удаляет сохранённые файлы.</p><div id="logs">Ожидание журнала…</div></div>
 <div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
 </div>
 <script>
@@ -93,7 +98,7 @@ static constexpr int PIN_BM_RX = 16;
 static constexpr int PIN_OLED_SDA = 21;
 static constexpr int PIN_OLED_SCL = 22;
 static constexpr uint32_t CONSOLE_BAUD = 115200;
-static constexpr uint32_t HEATER_BAUD = 9600;
+static constexpr uint32_t HEATER_BAUD = 25000;
 static constexpr uint32_t BUS_IDLE_GAP_MS = 100;
 static constexpr uint8_t FRAME_BYTES = 48;
 static constexpr uint8_t OLED_WIDTH = 128;
@@ -118,6 +123,11 @@ char debugLog[RAM_LOG_LINES][RAM_LOG_LINE_LEN] = {};
 size_t logWriteIndex = 0;
 size_t logLineCount = 0;
 portMUX_TYPE logMux = portMUX_INITIALIZER_UNLOCKED;
+char persistentPending[PERSIST_PENDING_BYTES] = {};
+size_t persistentPendingLength = 0;
+bool persistentLogReady = false;
+bool persistentPendingOverflow = false;
+uint32_t lastPersistentFlushMs = 0;
 volatile bool clearLogRequested = false;
 uint8_t rawChunk[RAW_CHUNK_BYTES] = {};
 size_t rawChunkCount = 0;
@@ -132,7 +142,73 @@ void appendLog(const char *line) {
   snprintf(debugLog[logWriteIndex], RAM_LOG_LINE_LEN, "%s", clean);
   logWriteIndex = (logWriteIndex + 1) % RAM_LOG_LINES;
   if (logLineCount < RAM_LOG_LINES) ++logLineCount;
+  const size_t remaining = PERSIST_PENDING_BYTES - persistentPendingLength;
+  const size_t lineLength = strlen(clean);
+  if (remaining > lineLength + 1) {
+    memcpy(persistentPending + persistentPendingLength, clean, lineLength);
+    persistentPendingLength += lineLength;
+    persistentPending[persistentPendingLength++] = '\n';
+    persistentPending[persistentPendingLength] = '\0';
+  } else {
+    persistentPendingOverflow = true;
+  }
   portEXIT_CRITICAL(&logMux);
+}
+
+void initPersistentLog() {
+  // Never auto-format on mount failure: preserve any existing capture.
+  persistentLogReady = LittleFS.begin(false);
+  if (!persistentLogReady) {
+    Serial.println("# WARNING: LittleFS mount failed; persistent logging disabled, RAM/USB serial still active.");
+    return;
+  }
+  if (!LittleFS.exists(PERSIST_LOG_PATH)) {
+    File f = LittleFS.open(PERSIST_LOG_PATH, FILE_WRITE);
+    if (f) f.close();
+  }
+  lastPersistentFlushMs = millis();
+}
+
+void flushPersistentLog(bool force = false) {
+  if (!persistentLogReady) return;
+  if (!force && millis() - lastPersistentFlushMs < 1000) return;
+  char batch[PERSIST_PENDING_BYTES];
+  size_t length = 0;
+  bool overflow = false;
+  portENTER_CRITICAL(&logMux);
+  length = persistentPendingLength;
+  if (length > 0) memcpy(batch, persistentPending, length);
+  persistentPendingLength = 0;
+  persistentPending[0] = '\0';
+  overflow = persistentPendingOverflow;
+  persistentPendingOverflow = false;
+  portEXIT_CRITICAL(&logMux);
+  lastPersistentFlushMs = millis();
+  if (length == 0 && !overflow) return;
+
+  File current = LittleFS.open(PERSIST_LOG_PATH, FILE_APPEND);
+  if (!current) {
+    Serial.println("# WARNING: cannot open persistent log; this batch may be lost.");
+    return;
+  }
+  if (current.size() + length > PERSIST_LOG_MAX_BYTES) {
+    current.close();
+    LittleFS.remove(PERSIST_LOG_OLD_PATH);
+    if (LittleFS.exists(PERSIST_LOG_PATH) && !LittleFS.rename(PERSIST_LOG_PATH, PERSIST_LOG_OLD_PATH)) {
+      Serial.println("# WARNING: log rotation failed; continuing with current log.");
+    }
+    current = LittleFS.open(PERSIST_LOG_PATH, FILE_WRITE);
+    if (!current) {
+      Serial.println("# WARNING: cannot create new persistent log; this batch may be lost.");
+      return;
+    }
+  }
+  if (length > 0) current.write(reinterpret_cast<const uint8_t *>(batch), length);
+  current.close();
+  if (overflow) {
+    File f = LittleFS.open(PERSIST_LOG_PATH, FILE_APPEND);
+    if (f) { f.println("# WARNING: persistent log staging buffer overflow; some lines may be missing"); f.close(); }
+  }
 }
 
 void logPrintln(const char *line = "") { Serial.println(line); appendLog(line); }
@@ -239,6 +315,8 @@ bool parseExchange(const uint8_t *p) {
     logCrcDetails(p); dumpFrame("CANDIDATE HEX:", p); return false;
   }
 
+  // Field offsets mirror the reference RX-only Blue Wire parser. Keep this
+  // mapping provisional until plausible live readings are confirmed on this unit.
   telem.header = p[0];
   telem.demand = p[4];
   const uint8_t receivedState = p[26];
@@ -359,8 +437,27 @@ void setupOtaWeb() {
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
   });
   server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String snapshot = logSnapshot();
-    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain; charset=utf-8", snapshot);
+    if (!persistentLogReady || !LittleFS.exists(PERSIST_LOG_PATH)) {
+      request->send(503, "text/plain; charset=utf-8", "Persistent log unavailable; use /download-log-ram or USB serial.");
+      return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(LittleFS, PERSIST_LOG_PATH, "text/plain; charset=utf-8", true);
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    response->addHeader("Content-Disposition", "attachment; filename=wiretap.log.txt");
+    request->send(response);
+  });
+  server.on("/download-log-previous", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!persistentLogReady || !LittleFS.exists(PERSIST_LOG_OLD_PATH)) {
+      request->send(404, "text/plain; charset=utf-8", "No archived log segment yet.");
+      return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(LittleFS, PERSIST_LOG_OLD_PATH, "text/plain; charset=utf-8", true);
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    response->addHeader("Content-Disposition", "attachment; filename=wiretap-archive.log.txt");
+    request->send(response);
+  });
+  server.on("/download-log-ram", HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain; charset=utf-8", logSnapshot());
     response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram.log.txt");
     request->send(response);
@@ -387,12 +484,15 @@ void setupOtaWeb() {
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(250);
+  initPersistentLog();
   logPrintln();
   logPrintln("# Autoheater compatibility hypothesis wiretap");
   logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
+  logPrintln("# Persistent log: LittleFS, buffered writes ~1s, current + one rotated archive.");
   logPrintf("# UART2 RX GPIO%d, fixed %lu baud 8N1; OLED SDA=%d SCL=%d\n",
                 PIN_BM_RX, (unsigned long)HEATER_BAUD, PIN_OLED_SDA, PIN_OLED_SCL);
-  logPrintln("# Parser checks 48-byte exchange, 0x76/0x78 headers, 0x16 markers, CRC16/Modbus.");
+  logPrintln("# Blue Wire candidate parser: 48-byte exchange, 0x76/0x78 controller header, 0x76 response header.");
+  logPrintln("# Frame validation follows timmchugh11/Chinese-Diesel-Heater---ESPHome (CRC16/Modbus); compatibility is unconfirmed.");
   logPrintln("# No valid frames does NOT by itself disprove protocol compatibility.");
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
@@ -418,6 +518,7 @@ void setup() {
 }
 
 void loop() {
+  flushPersistentLog();
   if (clearLogRequested) {
     clearLogRequested = false;
     portENTER_CRITICAL(&logMux);
