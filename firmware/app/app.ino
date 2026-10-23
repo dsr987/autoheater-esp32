@@ -312,7 +312,7 @@ void resetCapture() {
 
 void acceptByte(uint8_t b, uint32_t nowMs) {
   ++bytesSeen; const uint32_t gap = nowMs - lastByteMs; lastByteMs = nowMs;
-  if (gap > BUS_IDLE_GAP_MS) { flushRawChunk(); logPrintf("UART_GAP ms=%lu gap_ms=%lu bytes_total=%lu partial_candidate=%u\n", (unsigned long)nowMs, (unsigned long)gap, (unsigned long)bytesSeen, frameActive ? frameCount : 0); resetCapture(); }
+  if (gap > BUS_IDLE_GAP_MS) { flushRawChunk(); logPrintf("UART_GAP baud=%lu ms=%lu gap_ms=%lu bytes_total=%lu partial_candidate=%u\n", (unsigned long)activeBaud, (unsigned long)nowMs, (unsigned long)gap, (unsigned long)bytesSeen, frameActive ? frameCount : 0); resetCapture(); }
   recordRawByte(b, nowMs, gap);
 
   if (!frameActive) {
