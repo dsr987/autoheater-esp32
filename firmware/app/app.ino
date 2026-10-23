@@ -98,7 +98,7 @@ static constexpr int PIN_BM_RX = 16;
 static constexpr int PIN_OLED_SDA = 21;
 static constexpr int PIN_OLED_SCL = 22;
 static constexpr uint32_t CONSOLE_BAUD = 115200;
-static constexpr uint32_t HEATER_BAUD = 9600;
+static constexpr uint32_t HEATER_BAUD = 25000;
 static constexpr uint32_t BUS_IDLE_GAP_MS = 100;
 static constexpr uint8_t FRAME_BYTES = 48;
 static constexpr uint8_t OLED_WIDTH = 128;
@@ -315,6 +315,8 @@ bool parseExchange(const uint8_t *p) {
     logCrcDetails(p); dumpFrame("CANDIDATE HEX:", p); return false;
   }
 
+  // Field offsets mirror the reference RX-only Blue Wire parser. Keep this
+  // mapping provisional until plausible live readings are confirmed on this unit.
   telem.header = p[0];
   telem.demand = p[4];
   const uint8_t receivedState = p[26];
@@ -489,7 +491,8 @@ void setup() {
   logPrintln("# Persistent log: LittleFS, buffered writes ~1s, current + one rotated archive.");
   logPrintf("# UART2 RX GPIO%d, fixed %lu baud 8N1; OLED SDA=%d SCL=%d\n",
                 PIN_BM_RX, (unsigned long)HEATER_BAUD, PIN_OLED_SDA, PIN_OLED_SCL);
-  logPrintln("# Parser checks 48-byte exchange, 0x76/0x78 headers, 0x16 markers, CRC16/Modbus.");
+  logPrintln("# Blue Wire candidate parser: 48-byte exchange, 0x76/0x78 controller header, 0x76 response header.");
+  logPrintln("# Frame validation follows timmchugh11/Chinese-Diesel-Heater---ESPHome (CRC16/Modbus); compatibility is unconfirmed.");
   logPrintln("# No valid frames does NOT by itself disprove protocol compatibility.");
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
