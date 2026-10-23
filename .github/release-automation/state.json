@@ -5,15 +5,17 @@
     12,
     14,
     16,
-    18
+    18,
+    20
   ],
   "release_prs": [
     12,
     14,
     16,
-    18
+    18,
+    20
   ],
-  "last_processed_pr": 18,
+  "last_processed_pr": 20,
   "last_release_type": "patch",
-  "last_version": "0.2.3"
+  "last_version": "0.2.4"
 }
