@@ -19,6 +19,7 @@
 
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 #include <Arduino.h>
+#include <LittleFS.h>
 #include <stdarg.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -33,6 +34,11 @@ static constexpr char AP_SSID[] = "Autoheater";
 static constexpr char AP_PASSWORD[] = "12345678";  // bench only; change before deployment
 static constexpr char OTA_USERNAME[] = "admin";    // bench only; change before deployment
 static constexpr char OTA_PASSWORD[] = "admin";    // bench only; change before deployment
+static constexpr char LOG_PATH[] = "/wiretap.log";
+static constexpr size_t RAM_LOG_LINES = 100;
+static constexpr size_t RAM_LOG_LINE_LEN = 260;
+static constexpr size_t RAW_CHUNK_BYTES = 64;
+static constexpr size_t LOG_STAGE_BYTES = 3072;
 AsyncWebServer server(80);
 const char OTA_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -63,7 +69,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 <div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
 <div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
 <div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
-<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>Отладочный журнал</strong><button onclick="refreshLogs()">Обновить</button></div><p class="muted">Сообщения соответствуют отладочному выводу Serial Monitor. Журнал хранится в оперативной памяти и очищается после перезапуска.</p><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><a href="/download-log">Скачать TXT</a><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Полный журнал сохраняется в LittleFS и переживает перезапуск. В него входят сырые байты UART в HEX, временные отметки, найденные кандидаты, CRC и расшифрованные поля. Скачивайте файл периодически.</p><div class="muted" id="logInfo">Размер журнала: —</div><div id="logs">Ожидание журнала…</div></div>
 <div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
 </div>
 <script>
@@ -77,7 +83,8 @@ el('temp').textContent=d.have?d.temp+' °C':'—';el('duty').textContent=d.have?
 el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d.have?d.pump.toFixed(1)+' Гц':'—';
 el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
 }catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
-async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}}catch(e){}}
+async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}const info=await fetch('/api/log-info',{cache:'no-store'});if(info.ok){const d=await info.json();el('logInfo').textContent='Файл: '+d.bytes+' байт · LittleFS: свободно '+d.free+' из '+d.total+' байт'+(d.full?' · достигнут предел записи':'');}}catch(e){}}
+async function clearLog(){if(!confirm('Удалить сохранённый журнал и начать новый?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error(r.status);lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
 refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
 </script></body></html>
 )HTML";
@@ -107,48 +114,91 @@ uint32_t validFrames = 0;
 uint32_t badFrames = 0;
 uint32_t bytesSeen = 0;
 
-static constexpr size_t LOG_LINES = 80;
-static constexpr size_t LOG_LINE_LEN = 220;
-char debugLog[LOG_LINES][LOG_LINE_LEN] = {};
+char debugLog[RAM_LOG_LINES][RAM_LOG_LINE_LEN] = {};
 size_t logWriteIndex = 0;
 size_t logLineCount = 0;
 portMUX_TYPE logMux = portMUX_INITIALIZER_UNLOCKED;
+char pendingFileLog[LOG_STAGE_BYTES] = {};
+size_t pendingFileLogLength = 0;
+bool fileLogReady = false;
+bool fileLogFull = false;
+uint8_t rawChunk[RAW_CHUNK_BYTES] = {};
+size_t rawChunkCount = 0;
+uint32_t rawChunkStartMs = 0;
+uint32_t rawChunkGapMs = 0;
+
+void flushPersistentLog() {
+  if (!fileLogReady || pendingFileLogLength == 0 || fileLogFull) return;
+  const size_t total = LittleFS.totalBytes();
+  if (total == 0 || LittleFS.usedBytes() + pendingFileLogLength > total - 4096) { fileLogFull = true; return; }
+  File file = LittleFS.open(LOG_PATH, FILE_APPEND);
+  if (!file) { fileLogFull = true; return; }
+  const size_t written = file.write(reinterpret_cast<const uint8_t *>(pendingFileLog), pendingFileLogLength);
+  file.close();
+  if (written != pendingFileLogLength) { fileLogFull = true; return; }
+  pendingFileLogLength = 0; pendingFileLog[0] = '\0';
+}
 
 void appendLog(const char *line) {
+  char clean[RAM_LOG_LINE_LEN]; snprintf(clean, sizeof(clean), "%s", line);
+  size_t n = strlen(clean);
+  while (n > 0 && (clean[n - 1] == '\n' || clean[n - 1] == '\r')) clean[--n] = '\0';
   portENTER_CRITICAL(&logMux);
-  snprintf(debugLog[logWriteIndex], LOG_LINE_LEN, "%s", line);
-  logWriteIndex = (logWriteIndex + 1) % LOG_LINES;
-  if (logLineCount < LOG_LINES) ++logLineCount;
+  snprintf(debugLog[logWriteIndex], RAM_LOG_LINE_LEN, "%s", clean);
+  logWriteIndex = (logWriteIndex + 1) % RAM_LOG_LINES;
+  if (logLineCount < RAM_LOG_LINES) ++logLineCount;
   portEXIT_CRITICAL(&logMux);
+  if (!fileLogReady || fileLogFull || n == 0) return;
+  const size_t needed = n + 1;
+  if (pendingFileLogLength + needed >= LOG_STAGE_BYTES) flushPersistentLog();
+  if (pendingFileLogLength + needed < LOG_STAGE_BYTES) {
+    memcpy(pendingFileLog + pendingFileLogLength, clean, n); pendingFileLogLength += n;
+    pendingFileLog[pendingFileLogLength++] = '\n'; pendingFileLog[pendingFileLogLength] = '\0';
+  } else fileLogFull = true;
 }
 
-void logPrintln(const char *line = "") {
-  Serial.println(line);
-  appendLog(line);
-}
-
+void logPrintln(const char *line = "") { Serial.println(line); appendLog(line); }
 void logPrintf(const char *format, ...) {
-  char line[LOG_LINE_LEN];
-  va_list args;
-  va_start(args, format);
-  vsnprintf(line, sizeof(line), format, args);
-  va_end(args);
-  Serial.print(line);
-  appendLog(line);
+  char line[RAM_LOG_LINE_LEN]; va_list args; va_start(args, format);
+  vsnprintf(line, sizeof(line), format, args); va_end(args); Serial.print(line); appendLog(line);
 }
 
 String logSnapshot() {
-  String out;
-  portENTER_CRITICAL(&logMux);
-  const size_t start = (logWriteIndex + LOG_LINES - logLineCount) % LOG_LINES;
-  for (size_t i = 0; i < logLineCount; ++i) {
-    out += debugLog[(start + i) % LOG_LINES];
-    out += '\n';
-  }
-  portEXIT_CRITICAL(&logMux);
-  return out;
+  String out; portENTER_CRITICAL(&logMux);
+  const size_t first = (logWriteIndex + RAM_LOG_LINES - logLineCount) % RAM_LOG_LINES;
+  for (size_t i = 0; i < logLineCount; ++i) { out += debugLog[(first + i) % RAM_LOG_LINES]; out += '\n'; }
+  portEXIT_CRITICAL(&logMux); return out;
 }
 
+void beginPersistentLog() {
+  fileLogReady = LittleFS.begin(false);
+  if (!fileLogReady) { Serial.println("# ERROR: LittleFS mount failed; persistent log unavailable."); return; }
+  if (!LittleFS.exists(LOG_PATH)) { File file = LittleFS.open(LOG_PATH, FILE_WRITE); if (file) file.close(); }
+  fileLogReady = LittleFS.exists(LOG_PATH);
+  if (fileLogReady) { File file = LittleFS.open(LOG_PATH, FILE_APPEND); if (file) { file.printf("\n===== BOOT millis=%lu =====\n", (unsigned long)millis()); file.close(); } }
+}
+
+void clearPersistentLog() {
+  if (!fileLogReady) return;
+  pendingFileLogLength = 0; pendingFileLog[0] = '\0'; fileLogFull = false; rawChunkCount = 0;
+  portENTER_CRITICAL(&logMux);
+  logWriteIndex = 0; logLineCount = 0;
+  portEXIT_CRITICAL(&logMux);
+  File file = LittleFS.open(LOG_PATH, FILE_WRITE);
+  if (file) { file.println("# Log cleared from web UI"); file.close(); } else fileLogFull = true;
+}
+
+void flushRawChunk() {
+  if (rawChunkCount == 0) return; char line[250];
+  int used = snprintf(line, sizeof(line), "RAW ms=%lu gap_ms=%lu n=%u hex=", (unsigned long)rawChunkStartMs, (unsigned long)rawChunkGapMs, (unsigned)rawChunkCount);
+  for (size_t i = 0; i < rawChunkCount && used > 0 && size_t(used) < sizeof(line) - 4; ++i) used += snprintf(line + used, sizeof(line) - size_t(used), "%02X%s", rawChunk[i], (i + 1 == rawChunkCount) ? "" : " ");
+  logPrintln(line); rawChunkCount = 0;
+}
+
+void recordRawByte(uint8_t b, uint32_t nowMs, uint32_t gapMs) {
+  if (rawChunkCount == 0) { rawChunkStartMs = nowMs; rawChunkGapMs = gapMs; }
+  rawChunk[rawChunkCount++] = b; if (rawChunkCount >= RAW_CHUNK_BYTES) flushRawChunk();
+}
 struct Telemetry {
   uint8_t header = 0;
   uint8_t demand = 0;
@@ -212,21 +262,21 @@ const char *errorText(uint8_t error) {
   }
 }
 
-void dumpFrame(const uint8_t *p) {
-  logPrintf("RX valid #%lu: ", (unsigned long)validFrames);
-  for (uint8_t i = 0; i < FRAME_BYTES; ++i) {
-    if (i) Serial.write(' ');
-    logPrintf("%02X", p[i]);
-  }
-  logPrintln();
+void dumpFrame(const char *label, const uint8_t *p) {
+  char line[RAM_LOG_LINE_LEN]; int used = snprintf(line, sizeof(line), "%s", label);
+  for (uint8_t i = 0; i < FRAME_BYTES && used > 0 && size_t(used) < sizeof(line) - 4; ++i) used += snprintf(line + used, sizeof(line) - size_t(used), " %02X", p[i]);
+  logPrintln(line);
+}
+
+void logCrcDetails(const uint8_t *p) {
+  const uint16_t c0 = crc16Modbus(p, 22), c1 = crc16Modbus(p + 24, 22);
+  logPrintf("CRC block0 calc=%04X rx=%02X%02X valid=%s; block1 calc=%04X rx=%02X%02X valid=%s\n", c0, p[22], p[23], crcValid(p) ? "yes" : "NO", c1, p[46], p[47], crcValid(p + 24) ? "yes" : "NO");
 }
 
 bool parseExchange(const uint8_t *p) {
-  if ((p[0] != 0x76 && p[0] != 0x78) || p[1] != 0x16 ||
-      p[24] != 0x76 || p[25] != 0x16 ||
-      p[44] != 100 || p[45] != 0 ||
-      !crcValid(p) || !crcValid(p + 24)) {
-    return false;
+  if ((p[0] != 0x76 && p[0] != 0x78) || p[1] != 0x16 || p[24] != 0x76 || p[25] != 0x16 || p[44] != 100 || p[45] != 0 || !crcValid(p) || !crcValid(p + 24)) {
+    logPrintf("REJECT ms=%lu hdr=%02X%02X second=%02X%02X trailer=%u,%u\n", (unsigned long)millis(), p[0], p[1], p[24], p[25], p[44], p[45]);
+    logCrcDetails(p); dumpFrame("CANDIDATE HEX:", p); return false;
   }
 
   telem.header = p[0];
@@ -243,11 +293,8 @@ bool parseExchange(const uint8_t *p) {
   haveTelemetry = true;
   lastValidFrameMs = millis();
   ++validFrames;
-  dumpFrame(p);
-  logPrintf("DATA state=%s demand=%u duty=%.0f%% pump=%.1fHz fan=%uRPM chamber=%uC error=%u (%s)\n",
-                stateText(telem.state), telem.demand, telem.dutyPct,
-                telem.pumpHz, telem.fanRpm, telem.chamberC,
-                telem.error, errorText(telem.error));
+  dumpFrame("VALID HEX:", p);
+  logPrintf("DATA ms=%lu state_raw=%u state=%s active_error=%u demand_raw=%u duty_calc=%.1f%% pump_raw=%u pump=%.1fHz fan_raw=%u,%u fan=%uRPM chamber_raw=%u,%u chamber=%uC error=%u (%s)\n", (unsigned long)millis(), telem.state, stateText(telem.state), telem.activeError, telem.demand, telem.dutyPct, p[40], telem.pumpHz, p[30], p[31], telem.fanRpm, p[34], p[35], telem.chamberC, telem.error, errorText(telem.error));
   return true;
 }
 
@@ -257,10 +304,9 @@ void resetCapture() {
 }
 
 void acceptByte(uint8_t b, uint32_t nowMs) {
-  ++bytesSeen;
-  const uint32_t gap = nowMs - lastByteMs;
-  lastByteMs = nowMs;
-  if (gap > BUS_IDLE_GAP_MS) resetCapture();
+  ++bytesSeen; const uint32_t gap = nowMs - lastByteMs; lastByteMs = nowMs;
+  if (gap > BUS_IDLE_GAP_MS) { flushRawChunk(); logPrintf("UART_GAP ms=%lu gap_ms=%lu bytes_total=%lu partial_candidate=%u\n", (unsigned long)nowMs, (unsigned long)gap, (unsigned long)bytesSeen, frameActive ? frameCount : 0); resetCapture(); }
+  recordRawByte(b, nowMs, gap);
 
   if (!frameActive) {
     if (b == 0x76 || b == 0x78) {
@@ -350,7 +396,21 @@ void setupOtaWeb() {
     request->send(200, "application/json; charset=utf-8", json);
   });
   server.on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request) {
+    flushRawChunk(); flushPersistentLog();
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
+  });
+  server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
+    flushRawChunk(); flushPersistentLog();
+    if (!fileLogReady || !LittleFS.exists(LOG_PATH)) { request->send(500, "text/plain; charset=utf-8", "Persistent log unavailable"); return; }
+    request->send(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
+  });
+  server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
+    size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
+    char json[180]; snprintf(json, sizeof(json), "{\"bytes\":%lu,\"total\":%lu,\"free\":%lu,\"full\":%s}", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false");
+    request->send(200, "application/json; charset=utf-8", json);
+  });
+  server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
+    clearPersistentLog(); request->send(fileLogReady ? 200 : 500, "text/plain; charset=utf-8", fileLogReady ? "Log cleared" : "Persistent log unavailable");
   });
   ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
   server.begin();
@@ -362,6 +422,7 @@ void setupOtaWeb() {
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(250);
+  beginPersistentLog();
   logPrintln();
   logPrintln("# Autoheater compatibility hypothesis wiretap");
   logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
@@ -386,6 +447,7 @@ void setup() {
 
   HeaterSerial.setRxBufferSize(4096);
   HeaterSerial.begin(HEATER_BAUD, SERIAL_8N1, PIN_BM_RX, -1);
+  logPrintf("# LittleFS persistent log: %s, file=%s\n", fileLogReady ? "ready" : "UNAVAILABLE", LOG_PATH);
   setupOtaWeb();
 }
 
@@ -397,8 +459,7 @@ void loop() {
 
   static uint32_t lastDrawMs = 0;
   if (millis() - lastDrawMs >= 500) {
-    lastDrawMs = millis();
-    drawOled();
+    lastDrawMs = millis(); drawOled(); flushRawChunk(); flushPersistentLog();
   }
   ElegantOTA.loop();
 }
