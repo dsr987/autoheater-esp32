@@ -179,7 +179,11 @@ void beginPersistentLog() {
 }
 
 void clearPersistentLog() {
-  if (!fileLogReady) return; pendingFileLogLength = 0; pendingFileLog[0] = '\0'; fileLogFull = false;
+  if (!fileLogReady) return;
+  pendingFileLogLength = 0; pendingFileLog[0] = '\0'; fileLogFull = false; rawChunkCount = 0;
+  portENTER_CRITICAL(&logMux);
+  logWriteIndex = 0; logLineCount = 0;
+  portEXIT_CRITICAL(&logMux);
   File file = LittleFS.open(LOG_PATH, FILE_WRITE);
   if (file) { file.println("# Log cleared from web UI"); file.close(); } else fileLogFull = true;
 }
