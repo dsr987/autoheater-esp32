@@ -37,7 +37,7 @@ static constexpr char OTA_PASSWORD[] = "admin";    // bench only; change before 
 static constexpr char LOG_PATH[] = "/wiretap.log";
 static constexpr size_t RAM_LOG_LINES = 100;
 static constexpr size_t RAM_LOG_LINE_LEN = 260;
-static constexpr size_t RAW_CHUNK_BYTES = 32;
+static constexpr size_t RAW_CHUNK_BYTES = 64;
 static constexpr size_t LOG_STAGE_BYTES = 3072;
 AsyncWebServer server(80);
 const char OTA_PAGE[] PROGMEM = R"HTML(
@@ -185,7 +185,7 @@ void clearPersistentLog() {
 }
 
 void flushRawChunk() {
-  if (rawChunkCount == 0) return; char line[180];
+  if (rawChunkCount == 0) return; char line[250];
   int used = snprintf(line, sizeof(line), "RAW ms=%lu gap_ms=%lu n=%u hex=", (unsigned long)rawChunkStartMs, (unsigned long)rawChunkGapMs, (unsigned)rawChunkCount);
   for (size_t i = 0; i < rawChunkCount && used > 0 && size_t(used) < sizeof(line) - 4; ++i) used += snprintf(line + used, sizeof(line) - size_t(used), "%02X%s", rawChunk[i], (i + 1 == rawChunkCount) ? "" : " ");
   logPrintln(line); rawChunkCount = 0;
