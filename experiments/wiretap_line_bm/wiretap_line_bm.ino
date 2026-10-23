@@ -402,7 +402,7 @@ void setupOtaWeb() {
   });
   server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
     size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
-    char json[180]; snprintf(json, sizeof(json), "{\\"bytes\\":%lu,\\"total\\":%lu,\\"free\\":%lu,\\"full\\":%s}", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false");
+    char json[180]; snprintf(json, sizeof(json), "{\"bytes\":%lu,\"total\":%lu,\"free\":%lu,\"full\":%s}", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false");
     request->send(200, "application/json; charset=utf-8", json);
   });
   server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
