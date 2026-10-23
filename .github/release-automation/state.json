@@ -1,9 +1,13 @@
 {
   "schema_version": 1,
   "labels_initialized": true,
-  "processed_prs": [],
-  "release_prs": [],
-  "last_processed_pr": null,
-  "last_release_type": "none",
-  "last_version": "0.1.0"
+  "processed_prs": [
+    12
+  ],
+  "release_prs": [
+    12
+  ],
+  "last_processed_pr": 12,
+  "last_release_type": "minor",
+  "last_version": "0.2.0"
 }
