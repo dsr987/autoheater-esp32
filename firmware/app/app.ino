@@ -450,7 +450,7 @@ void setup() {
   logPrintln("# Autoheater compatibility hypothesis wiretap");
   logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
   logPrintf("# UART2 RX GPIO%d, candidate %lu baud 8N1; OLED SDA=%d SCL=%d\n",
-                PIN_BM_RX, (unsigned long)HEATER_BAUD, PIN_OLED_SDA, PIN_OLED_SCL);
+                PIN_BM_RX, (unsigned long)HEATER_BAUDS[0], PIN_OLED_SDA, PIN_OLED_SCL);
   logPrintln("# Parser checks 48-byte exchange, 0x76/0x78 headers, 0x16 markers, CRC16/Modbus.");
   logPrintln("# No valid frames does NOT by itself disprove protocol compatibility.");
 
