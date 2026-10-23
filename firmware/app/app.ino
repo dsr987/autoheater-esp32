@@ -366,11 +366,11 @@ void setupOtaWeb() {
     request->send(response);
   });
   server.on("/api/log/mark/up", HTTP_POST, [](AsyncWebServerRequest *request) {
-    logPrintf("# BUTTON_MARK direction=UP ms=%lu\\n", (unsigned long)millis());
+    logPrintf("# BUTTON_MARK direction=UP ms=%lu\n", (unsigned long)millis());
     request->send(200, "text/plain; charset=utf-8", "UP marker added");
   });
   server.on("/api/log/mark/down", HTTP_POST, [](AsyncWebServerRequest *request) {
-    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\\n", (unsigned long)millis());
+    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\n", (unsigned long)millis());
     request->send(200, "text/plain; charset=utf-8", "DOWN marker added");
   });
   server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
