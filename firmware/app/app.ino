@@ -419,6 +419,17 @@ void setupOtaWeb() {
   });
   server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
     size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
+    char json[320];
+    const bool exists = fileLogReady && LittleFS.exists(LOG_PATH);
+    const char *error = !fileLogReady ? "LittleFS mount or log file unavailable" : (fileLogFull ? "Log storage full or write failed" : "");
+    snprintf(json, sizeof(json), "{\"mounted\":%s,\"exists\":%s,\"bytes\":%lu,\"total\":%lu,\"free\":%lu,\"full\":%s,\"error\":\"%s\"}", fileLogReady ? "true" : "false", exists ? "true" : "false", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false", error);    String snapshot = String("# WARNING: LittleFS unavailable; this download contains only the recent RAM log (up to 100 lines).\n") + logSnapshot();
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain; charset=utf-8", snapshot);
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram-fallback.txt");
+    request->send(response);
+  });
+  server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
+    size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
     char json[180]; snprintf(json, sizeof(json), "{\"bytes\":%lu,\"total\":%lu,\"free\":%lu,\"full\":%s}", (unsigned long)fileBytes, fileLogReady ? (unsigned long)LittleFS.totalBytes() : 0UL, fileLogReady ? (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()) : 0UL, fileLogFull ? "true" : "false");
     request->send(200, "application/json; charset=utf-8", json);
   });
