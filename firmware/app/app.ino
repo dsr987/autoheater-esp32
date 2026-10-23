@@ -66,7 +66,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 <div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
 <div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
 <div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
-<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Журнал хранится в оперативной памяти (последние 100 строк). При перезапуске он очищается. Скачайте TXT, чтобы сохранить данные.</p><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="markButton('UP')" style="background:#15803d">Метка ↑ Вверх</button><button onclick="markButton('DOWN')" style="background:#b45309">Метка ↓ Вниз</button><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Журнал хранится в оперативной памяти (последние 100 строк). При перезапуске он очищается. Скачайте TXT, чтобы сохранить данные.</p><div id="logs">Ожидание журнала…</div></div>
 <div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
 </div>
 <script>
@@ -81,6 +81,7 @@ el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d
 el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
 }catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
 async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}}catch(e){el('logs').textContent='Ошибка чтения журнала: '+e.message;}}
+async function markButton(direction){try{const r=await fetch('/api/log/mark/'+direction.toLowerCase(),{method:'POST',cache:'no-store'});if(!r.ok)throw Error((await r.text())||('HTTP '+r.status));await refreshLogs();}catch(e){alert('Не удалось добавить метку: '+e.message);}}
 function downloadLog(){window.location.href='/download-log?ts='+Date.now();}
 async function clearLog(){if(!confirm('Очистить журнал в оперативной памяти?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error((await r.text())||r.status);lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
 refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
@@ -363,6 +364,14 @@ void setupOtaWeb() {
     response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     response->addHeader("Content-Disposition", "attachment; filename=wiretap-ram.log.txt");
     request->send(response);
+  });
+  server.on("/api/log/mark/up", HTTP_POST, [](AsyncWebServerRequest *request) {
+    logPrintf("# BUTTON_MARK direction=UP ms=%lu\n", (unsigned long)millis());
+    request->send(200, "text/plain; charset=utf-8", "UP marker added");
+  });
+  server.on("/api/log/mark/down", HTTP_POST, [](AsyncWebServerRequest *request) {
+    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\n", (unsigned long)millis());
+    request->send(200, "text/plain; charset=utf-8", "DOWN marker added");
   });
   server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
     clearLogRequested = true;
