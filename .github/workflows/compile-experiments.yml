@@ -5,13 +5,17 @@ on:
     branches:
       - main
     paths:
-      - "experiments/**"
+      - "experiments/**/*.ino"
+      - "experiments/**/*.cpp"
+      - "experiments/**/*.h"
       - ".github/workflows/compile-experiments.yml"
   pull_request:
     branches:
       - main
     paths:
-      - "experiments/**"
+      - "experiments/**/*.ino"
+      - "experiments/**/*.cpp"
+      - "experiments/**/*.h"
       - ".github/workflows/compile-experiments.yml"
   workflow_dispatch:
 

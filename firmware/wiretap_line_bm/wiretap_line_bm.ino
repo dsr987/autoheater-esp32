@@ -37,7 +37,7 @@ static constexpr char OTA_PASSWORD[] = "admin";    // bench only; change before 
 static constexpr char LOG_PATH[] = "/wiretap.log";
 static constexpr size_t RAM_LOG_LINES = 100;
 static constexpr size_t RAM_LOG_LINE_LEN = 260;
-static constexpr size_t RAW_CHUNK_BYTES = 64;
+static constexpr size_t RAW_CHUNK_BYTES = 24;
 static constexpr size_t LOG_STAGE_BYTES = 3072;
 AsyncWebServer server(80);
 const char OTA_PAGE[] PROGMEM = R"HTML(
@@ -69,7 +69,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:10px;ma
 <div class="card"><div class="k">Топливный насос</div><div class="v" id="pump">—</div></div>
 <div class="card"><div class="k">Последний кадр</div><div class="v" id="age">—</div></div>
 <div class="card"><div class="k">Заголовок</div><div class="v" id="header">—</div></div>
-<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><a href="/download-log">Скачать TXT</a><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Полный журнал сохраняется в LittleFS и переживает перезапуск. В него входят сырые байты UART в HEX, временные отметки, найденные кандидаты, CRC и расшифрованные поля. Скачивайте файл периодически.</p><div class="muted" id="logInfo">Размер журнала: —</div><div id="logs">Ожидание журнала…</div></div>
+<div class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><strong>Журнал захвата</strong><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="refreshLogs()">Обновить</button><button onclick="downloadLog()">Скачать TXT</button><button onclick="clearLog()">Очистить</button></div></div><p class="muted">Полный журнал сохраняется в LittleFS и переживает перезапуск. В него входят сырые байты UART в HEX, временные отметки, найденные кандидаты, CRC и расшифрованные поля. Скачивайте файл периодически.</p><div class="muted" id="logInfo">Размер журнала: —</div><div id="logs">Ожидание журнала…</div></div>
 <div class="card wide"><div class="muted">Проверка сырых данных и CRC — экспериментальная. Отсутствие корректных кадров само по себе не доказывает несовместимость протокола.</div></div>
 </div>
 <script>
@@ -84,7 +84,8 @@ el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d
 el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
 }catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
 async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}const info=await fetch('/api/log-info',{cache:'no-store'});if(info.ok){const d=await info.json();el('logInfo').textContent='Файл: '+d.bytes+' байт · LittleFS: свободно '+d.free+' из '+d.total+' байт'+(d.full?' · достигнут предел записи':'');}}catch(e){}}
-async function clearLog(){if(!confirm('Удалить сохранённый журнал и начать новый?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error(r.status);lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
+async function downloadLog(){try{const r=await fetch('/download-log',{cache:'no-store'});if(!r.ok)throw Error((await r.text())||r.status);const blob=await r.blob();if(!blob.size)throw Error('Файл пуст');const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='wiretap.log.txt';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){alert('Не удалось скачать лог: '+e.message);}}
+async function clearLog(){if(!confirm('Удалить сохранённый журнал и начать новый?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error((await r.text())||r.status);await new Promise(resolve=>setTimeout(resolve,400));lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
 refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
 </script></body></html>
 )HTML";
@@ -122,6 +123,7 @@ char pendingFileLog[LOG_STAGE_BYTES] = {};
 size_t pendingFileLogLength = 0;
 bool fileLogReady = false;
 bool fileLogFull = false;
+volatile bool clearLogRequested = false;
 uint8_t rawChunk[RAW_CHUNK_BYTES] = {};
 size_t rawChunkCount = 0;
 uint32_t rawChunkStartMs = 0;
@@ -396,13 +398,14 @@ void setupOtaWeb() {
     request->send(200, "application/json; charset=utf-8", json);
   });
   server.on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request) {
-    flushRawChunk(); flushPersistentLog();
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
   });
   server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
-    flushRawChunk(); flushPersistentLog();
-    if (!fileLogReady || !LittleFS.exists(LOG_PATH)) { request->send(500, "text/plain; charset=utf-8", "Persistent log unavailable"); return; }
-    request->send(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
+    if (!fileLogReady || !LittleFS.exists(LOG_PATH)) { request->send(503, "text/plain; charset=utf-8", "Persistent log unavailable; check LittleFS status on the page"); return; }
+    AsyncWebServerResponse *response = request->beginResponse(LittleFS, LOG_PATH, "text/plain; charset=utf-8", true);
+    response->addHeader("Cache-Control", "no-store");
+    response->addHeader("Content-Disposition", "attachment; filename=wiretap.log.txt");
+    request->send(response);
   });
   server.on("/api/log-info", HTTP_GET, [](AsyncWebServerRequest *request) {
     size_t fileBytes = 0; File f = fileLogReady ? LittleFS.open(LOG_PATH, FILE_READ) : File(); if (f) { fileBytes = f.size(); f.close(); }
@@ -410,7 +413,9 @@ void setupOtaWeb() {
     request->send(200, "application/json; charset=utf-8", json);
   });
   server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
-    clearPersistentLog(); request->send(fileLogReady ? 200 : 500, "text/plain; charset=utf-8", fileLogReady ? "Log cleared" : "Persistent log unavailable");
+    if (!fileLogReady) { request->send(503, "text/plain; charset=utf-8", "Persistent log unavailable"); return; }
+    clearLogRequested = true;
+    request->send(202, "text/plain; charset=utf-8", "Log clear queued");
   });
   ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
   server.begin();
@@ -452,6 +457,7 @@ void setup() {
 }
 
 void loop() {
+  if (clearLogRequested) { clearLogRequested = false; clearPersistentLog(); logPrintln("# Log cleared from web UI"); }
   while (HeaterSerial.available() > 0) {
     const int b = HeaterSerial.read();
     if (b >= 0) acceptByte(uint8_t(b), millis());
