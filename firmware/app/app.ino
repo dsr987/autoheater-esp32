@@ -81,7 +81,8 @@ el('fan').textContent=d.have?d.fan+' об/мин':'—';el('pump').textContent=d
 el('age').textContent=d.have?d.age+' с':'—';el('header').textContent=d.have?'0x'+d.header.toString(16).toUpperCase().padStart(2,'0'):'—';
 }catch(e){el('conn').textContent='Нет связи с веб-интерфейсом: '+e.message;}}
 async function refreshLogs(){try{const r=await fetch('/api/log',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const t=await r.text();if(t!==lastLogs){const box=el('logs');const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-25;box.textContent=t||'Журнал пока пуст.';if(atBottom)box.scrollTop=box.scrollHeight;lastLogs=t;}}catch(e){el('logs').textContent='Ошибка чтения журнала: '+e.message;}}
-async function markButton(direction){try{const r=await fetch('/api/log/mark/'+direction.toLowerCase(),{method:'POST',cache:'no-store'});if(!r.ok)throw Error((await r.text())||('HTTP '+r.status));await refreshLogs();}catch(e){alert('Не удалось добавить метку: '+e.message);}}\nfunction downloadLog(){window.location.href='/download-log?ts='+Date.now();}
+async function markButton(direction){try{const r=await fetch('/api/log/mark/'+direction.toLowerCase(),{method:'POST',cache:'no-store'});if(!r.ok)throw Error((await r.text())||('HTTP '+r.status));await refreshLogs();}catch(e){alert('Не удалось добавить метку: '+e.message);}}
+function downloadLog(){window.location.href='/download-log?ts='+Date.now();}
 async function clearLog(){if(!confirm('Очистить журнал в оперативной памяти?'))return;try{const r=await fetch('/api/log/clear',{method:'POST'});if(!r.ok)throw Error((await r.text())||r.status);lastLogs='';await refreshLogs();}catch(e){alert('Не удалось очистить журнал: '+e.message);}}
 refreshStatus();refreshLogs();setInterval(refreshStatus,1000);setInterval(refreshLogs,1500);
 </script></body></html>
@@ -365,13 +366,11 @@ void setupOtaWeb() {
     request->send(response);
   });
   server.on("/api/log/mark/up", HTTP_POST, [](AsyncWebServerRequest *request) {
-    logPrintf("# BUTTON_MARK direction=UP ms=%lu\
-", (unsigned long)millis());
+    logPrintf("# BUTTON_MARK direction=UP ms=%lu\\n", (unsigned long)millis());
     request->send(200, "text/plain; charset=utf-8", "UP marker added");
   });
   server.on("/api/log/mark/down", HTTP_POST, [](AsyncWebServerRequest *request) {
-    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\
-", (unsigned long)millis());
+    logPrintf("# BUTTON_MARK direction=DOWN ms=%lu\\n", (unsigned long)millis());
     request->send(200, "text/plain; charset=utf-8", "DOWN marker added");
   });
   server.on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
