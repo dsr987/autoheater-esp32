@@ -1,4 +1,5 @@
 name: Build firmware
+
 on:
   push:
     branches: [main]
@@ -6,20 +7,25 @@ on:
   pull_request:
     paths: ['firmware/**', '.github/workflows/**']
   workflow_dispatch:
+
 permissions:
-  contents: read
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: arduino/setup-arduino-cli@v2
+
       - name: Configure ESP32 platform
         run: |
           arduino-cli config init --overwrite
           arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@2.0.9
+
       - name: Install libraries
         run: |
           arduino-cli lib install "AsyncTCP"
@@ -28,21 +34,60 @@ jobs:
           arduino-cli lib install "Adafruit SSD1306"
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit BusIO"
+
       - name: Compile primary app firmware
         run: arduino-cli compile --fqbn esp32:esp32:esp32 --build-property compiler.cpp.extra_flags="-DELEGANTOTA_USE_ASYNC_WEBSERVER=1" --output-dir "$RUNNER_TEMP/app-build" firmware/app
+
       - name: Package OTA binary
         run: |
+          set -euo pipefail
           mkdir -p dist
+          test -s "$RUNNER_TEMP/app-build/app.ino.bin"
           cp "$RUNNER_TEMP/app-build/app.ino.bin" dist/autoheater-esp32.bin
           sha256sum dist/autoheater-esp32.bin > dist/autoheater-esp32.bin.sha256
+
       - name: Compile bootstrap
         run: arduino-cli compile --fqbn esp32:esp32:esp32 --build-property compiler.cpp.extra_flags="-DELEGANTOTA_USE_ASYNC_WEBSERVER=1" --output-dir "$RUNNER_TEMP/bootstrap-build" firmware/bootstrap/Autoheater_ESP32_Bootstrap
-      - uses: actions/upload-artifact@v4
+
+      - name: Package bootstrap binary
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/bootstrap-build/Autoheater_ESP32_Bootstrap.ino.bin"
+          cp "$RUNNER_TEMP/bootstrap-build/Autoheater_ESP32_Bootstrap.ino.bin" dist/Autoheater_ESP32_Bootstrap.bin
+          sha256sum dist/Autoheater_ESP32_Bootstrap.bin > dist/Autoheater_ESP32_Bootstrap.bin.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
           name: autoheater-esp32-firmware
-          path: |
-            dist/autoheater-esp32.bin
-            dist/autoheater-esp32.bin.sha256
-            ${{ runner.temp }}/bootstrap-build/Autoheater_ESP32_Bootstrap.ino.bin
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish or update latest GitHub Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="$(cat <<'EOF'
+          Automatically built from the latest successful commit on main.
+
+          Assets:
+          - `autoheater-esp32.bin`: main application firmware / OTA image.
+          - `autoheater-esp32.bin.sha256`: SHA-256 checksum.
+          - `Autoheater_ESP32_Bootstrap.bin`: initial USB flash image.
+          - `Autoheater_ESP32_Bootstrap.bin.sha256`: bootstrap checksum.
+
+          This release is updated only after both firmware targets compile successfully.
+          EOF
+          )"
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest dist/autoheater-esp32.bin dist/autoheater-esp32.bin.sha256 dist/Autoheater_ESP32_Bootstrap.bin dist/Autoheater_ESP32_Bootstrap.bin.sha256 --clobber
+            gh release edit latest --title "Autoheater ESP32 — latest firmware" --notes "$notes" --latest
+          else
+            gh release create latest dist/autoheater-esp32.bin dist/autoheater-esp32.bin.sha256 dist/Autoheater_ESP32_Bootstrap.bin dist/Autoheater_ESP32_Bootstrap.bin.sha256 --title "Autoheater ESP32 — latest firmware" --notes "$notes" --latest
+          fi
