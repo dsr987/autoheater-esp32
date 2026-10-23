@@ -147,8 +147,8 @@ void appendLog(const char *line) {
   if (remaining > lineLength + 1) {
     memcpy(persistentPending + persistentPendingLength, clean, lineLength);
     persistentPendingLength += lineLength;
-    persistentPending[persistentPendingLength++] = '\\n';
-    persistentPending[persistentPendingLength] = '\\0';
+    persistentPending[persistentPendingLength++] = '\n';
+    persistentPending[persistentPendingLength] = '\0';
   } else {
     persistentPendingOverflow = true;
   }
@@ -179,7 +179,7 @@ void flushPersistentLog(bool force = false) {
   length = persistentPendingLength;
   if (length > 0) memcpy(batch, persistentPending, length);
   persistentPendingLength = 0;
-  persistentPending[0] = '\\0';
+  persistentPending[0] = '\0';
   overflow = persistentPendingOverflow;
   persistentPendingOverflow = false;
   portEXIT_CRITICAL(&logMux);
@@ -435,7 +435,6 @@ void setupOtaWeb() {
     request->send(200, "text/plain; charset=utf-8", logSnapshot());
   });
   server.on("/download-log", HTTP_GET, [](AsyncWebServerRequest *request) {
-    flushPersistentLog(true);
     if (!persistentLogReady || !LittleFS.exists(PERSIST_LOG_PATH)) {
       request->send(503, "text/plain; charset=utf-8", "Persistent log unavailable; use /download-log-ram or USB serial.");
       return;
@@ -446,7 +445,6 @@ void setupOtaWeb() {
     request->send(response);
   });
   server.on("/download-log-previous", HTTP_GET, [](AsyncWebServerRequest *request) {
-    flushPersistentLog(true);
     if (!persistentLogReady || !LittleFS.exists(PERSIST_LOG_OLD_PATH)) {
       request->send(404, "text/plain; charset=utf-8", "No archived log segment yet.");
       return;
