@@ -92,9 +92,7 @@ static constexpr int PIN_BM_RX = 16;
 static constexpr int PIN_OLED_SDA = 21;
 static constexpr int PIN_OLED_SCL = 22;
 static constexpr uint32_t CONSOLE_BAUD = 115200;
-static constexpr uint32_t HEATER_BAUDS[] = {25000, 9600, 4800, 2400};
-static constexpr size_t HEATER_BAUD_COUNT = sizeof(HEATER_BAUDS) / sizeof(HEATER_BAUDS[0]);
-static constexpr uint32_t BAUD_DWELL_MS = 12000;  // one rate per 12 s
+static constexpr uint32_t HEATER_BAUD = 9600;
 static constexpr uint32_t BUS_IDLE_GAP_MS = 100;
 static constexpr uint8_t FRAME_BYTES = 48;
 static constexpr uint8_t OLED_WIDTH = 128;
@@ -113,9 +111,7 @@ uint32_t lastValidFrameMs = 0;
 uint32_t validFrames = 0;
 uint32_t badFrames = 0;
 uint32_t bytesSeen = 0;
-uint32_t activeBaud = HEATER_BAUDS[0];
-uint32_t baudStartedMs = 0;
-size_t baudIndex = 0;
+uint32_t activeBaud = HEATER_BAUD;
 
 char debugLog[RAM_LOG_LINES][RAM_LOG_LINE_LEN] = {};
 size_t logWriteIndex = 0;
@@ -385,8 +381,8 @@ void setup() {
   logPrintln();
   logPrintln("# Autoheater compatibility hypothesis wiretap");
   logPrintln("# PASSIVE RX ONLY: no TX configured, no heater commands.");
-  logPrintf("# UART2 RX GPIO%d, candidate %lu baud 8N1; OLED SDA=%d SCL=%d\n",
-                PIN_BM_RX, (unsigned long)HEATER_BAUDS[0], PIN_OLED_SDA, PIN_OLED_SCL);
+  logPrintf("# UART2 RX GPIO%d, fixed %lu baud 8N1; OLED SDA=%d SCL=%d\n",
+                PIN_BM_RX, (unsigned long)HEATER_BAUD, PIN_OLED_SDA, PIN_OLED_SCL);
   logPrintln("# Parser checks 48-byte exchange, 0x76/0x78 headers, 0x16 markers, CRC16/Modbus.");
   logPrintln("# No valid frames does NOT by itself disprove protocol compatibility.");
 
@@ -405,32 +401,14 @@ void setup() {
   }
 
   HeaterSerial.setRxBufferSize(4096);
-  activeBaud = HEATER_BAUDS[0];
-  baudIndex = 0;
-  baudStartedMs = millis();
+  activeBaud = HEATER_BAUD;
   HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
-  logPrintf("# BAUD_SCAN_START baud=%lu dwell_ms=%lu\n", (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS);
+  lastByteMs = millis();
+  logPrintf("# UART_FIXED_BAUD baud=%lu format=8N1 rx_gpio=%d tx=disabled\n", (unsigned long)activeBaud, PIN_BM_RX);
   setupOtaWeb();
 }
 
 void loop() {
-  // Passive baud-rate sweep: no TX pin is configured. Discard the partial
-  // candidate at each rate change so bytes from different decoders cannot mix.
-  if (millis() - baudStartedMs >= BAUD_DWELL_MS) {
-    flushRawChunk();
-    resetCapture();
-    while (HeaterSerial.available() > 0) HeaterSerial.read();
-    baudIndex = (baudIndex + 1) % HEATER_BAUD_COUNT;
-    activeBaud = HEATER_BAUDS[baudIndex];
-    HeaterSerial.end();
-    delay(2);
-    HeaterSerial.begin(activeBaud, SERIAL_8N1, PIN_BM_RX, -1);
-    baudStartedMs = millis();
-    lastByteMs = baudStartedMs;
-    logPrintf("# BAUD_SCAN baud=%lu dwell_ms=%lu total_bytes=%lu valid=%lu rejected=%lu\n",
-      (unsigned long)activeBaud, (unsigned long)BAUD_DWELL_MS,
-      (unsigned long)bytesSeen, (unsigned long)validFrames, (unsigned long)badFrames);
-  }
   if (clearLogRequested) {
     clearLogRequested = false;
     portENTER_CRITICAL(&logMux);
