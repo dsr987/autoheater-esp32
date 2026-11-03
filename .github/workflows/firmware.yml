@@ -35,8 +35,11 @@ jobs:
           python3 tools/update_readme_version.py
           git diff --exit-code -- CHANGELOG.md README.md
 
-      - name: Prepare Arduino sketch
-        run: python3 tools/prepare_sketch.py "$RUNNER_TEMP/Autoheater"
+      - name: Prepare factory sketch
+        run: |
+          set -euo pipefail
+          python3 tools/prepare_factory.py
+          git diff --exit-code -- factory/
 
       - name: Install ESP32 Python dependency
         run: python -m pip install pyserial
@@ -63,18 +66,40 @@ jobs:
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit BusIO"
 
-      - name: Compile firmware
+      - name: Compile firmware and factory image
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p dist "$RUNNER_TEMP/factory-build"
           arduino-cli compile \
             --fqbn esp32:esp32:esp32 \
             --build-property compiler.cpp.extra_flags="-DELEGANTOTA_USE_ASYNC_WEBSERVER=1" \
-            --output-dir "$RUNNER_TEMP/Autoheater-build" \
-            "$RUNNER_TEMP/Autoheater"
-          test -s "$RUNNER_TEMP/Autoheater-build/Autoheater.ino.bin"
-          cp "$RUNNER_TEMP/Autoheater-build/Autoheater.ino.bin" dist/autoheater-esp32.bin
+            --build-path "$RUNNER_TEMP/factory-build" \
+            factory
+
+          BUILD="$RUNNER_TEMP/factory-build"
+          test -s "$BUILD/factory.ino.bin"
+          test -s "$BUILD/factory.ino.bootloader.bin"
+          test -s "$BUILD/factory.ino.partitions.bin"
+          test -s "$BUILD/factory.ino.merged.bin"
+          test -s "$BUILD/boot_app0.bin"
+
+          APP_SIZE="$(stat -c%s "$BUILD/factory.ino.bin")"
+          OTA_SLOT_SIZE=$((0x1E0000))
+          if [ "$APP_SIZE" -gt "$OTA_SLOT_SIZE" ]; then
+            echo "::error::Firmware image ($APP_SIZE bytes) exceeds OTA slot ($OTA_SLOT_SIZE bytes)"
+            exit 1
+          fi
+
+          FACTORY_SIZE="$(stat -c%s "$BUILD/factory.ino.merged.bin")"
+          if [ "$FACTORY_SIZE" -ne 4194304 ]; then
+            echo "::error::Factory image must be exactly 4 MiB, got $FACTORY_SIZE bytes"
+            exit 1
+          fi
+
+          cp "$BUILD/factory.ino.bin" dist/autoheater-esp32.bin
+          cp "$BUILD/factory.ino.merged.bin" dist/factory.bin
           sha256sum dist/autoheater-esp32.bin > dist/autoheater-esp32.bin.sha256
+          sha256sum dist/factory.bin > dist/factory.bin.sha256
 
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -118,5 +143,7 @@ jobs:
           files: |
             dist/autoheater-esp32.bin
             dist/autoheater-esp32.bin.sha256
+            dist/factory.bin
+            dist/factory.bin.sha256
           fail_on_unmatched_files: true
           make_latest: true
