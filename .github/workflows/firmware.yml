@@ -80,8 +80,10 @@ jobs:
           test -s "$BUILD/factory.ino.bin"
           test -s "$BUILD/factory.ino.bootloader.bin"
           test -s "$BUILD/factory.ino.partitions.bin"
-          test -s "$BUILD/factory.ino.merged.bin"
-          test -s "$BUILD/boot_app0.bin"
+          ESPTOOL="$(find "$HOME/.arduino15/packages/esp32/tools/esptool_py" -type f -name esptool.py -print -quit)"
+          BOOT_APP0="$HOME/.arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/boot_app0.bin"
+          test -s "$ESPTOOL"
+          test -s "$BOOT_APP0"
 
           APP_SIZE="$(stat -c%s "$BUILD/factory.ino.bin")"
           OTA_SLOT_SIZE=$((0x1E0000))
@@ -90,14 +92,19 @@ jobs:
             exit 1
           fi
 
-          FACTORY_SIZE="$(stat -c%s "$BUILD/factory.ino.merged.bin")"
-          if [ "$FACTORY_SIZE" -ne 4194304 ]; then
-            echo "::error::Factory image must be exactly 4 MiB, got $FACTORY_SIZE bytes"
+          cp "$BUILD/factory.ino.bin" dist/autoheater-esp32.bin
+          python3 "$ESPTOOL" --chip esp32 merge_bin \
+            -o dist/factory.bin \
+            0x1000 "$BUILD/factory.ino.bootloader.bin" \
+            0x8000 "$BUILD/factory.ino.partitions.bin" \
+            0xE000 "$BOOT_APP0" \
+            0x10000 "$BUILD/factory.ino.bin"
+          test -s dist/factory.bin
+          FACTORY_SIZE="$(stat -c%s dist/factory.bin)"
+          if [ "$FACTORY_SIZE" -gt 4194304 ]; then
+            echo "::error::Factory image exceeds 4 MiB flash size ($FACTORY_SIZE bytes)"
             exit 1
           fi
-
-          cp "$BUILD/factory.ino.bin" dist/autoheater-esp32.bin
-          cp "$BUILD/factory.ino.merged.bin" dist/factory.bin
           sha256sum dist/autoheater-esp32.bin > dist/autoheater-esp32.bin.sha256
           sha256sum dist/factory.bin > dist/factory.bin.sha256
 
