@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: firmware-\${{ github.ref }}
+  group: firmware-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -109,8 +109,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: \${{ github.ref_name }}
-          name: Autoheater ESP32 \${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          name: Autoheater ESP32 ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             dist/autoheater-esp32.bin

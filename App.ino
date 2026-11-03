@@ -330,6 +330,8 @@ bool commandStart() {
   return true;
 }
 bool commandStop() {
+  // Stop takes priority over queued start/power frames.
+  txTail = txHead;
   bool result = true;
   for (uint8_t i = 0; i < 3; ++i)
     result = enqueueWriteByte(0x03, 0x00) && result;
