@@ -49,7 +49,7 @@ a{color:#8ee5c2}.error{color:#ff9b91}
 </section>
 <section class="card">
   <div class="section-title">Управление</div>
-  <div class="controls"><button id="start" disabled>ПУСК</button><button id="stop">СТОП</button></div>
+  <div class="controls"><button id="start">ПУСК</button><button id="stop">СТОП</button></div>
   <div class="power-controls"><button id="power-down" disabled>Мощность −</button><button id="power-up" disabled>Мощность +</button></div>
   <div id="power-level">Управление мощностью недоступно без связи с отопителем</div>
   <p class="note">Команды отправляются в паузах шины. После остановки штатного пульта ESP32 продолжает опрашивать регистры отопителя. Кнопка «Стоп» остаётся доступной даже при потере телеметрии.</p>
@@ -69,7 +69,7 @@ a{color:#8ee5c2}.error{color:#ff9b91}
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const stateNames = {32:"Свеча / прогрев",36:"Розжиг",37:"Пламя поймано",39:"Набор мощности",47:"Выход на режим",46:"Установившееся горение"};
+  const stateNames = {32:"Свеча / прогрев",36:"Розжиг",37:"Пламя поймано",39:"Набор мощности",47:"Выход на режим",46:"Установившееся горение",56:"Переход"};
   let socket;
   let reconnectTimer;
   let lastDataAt = 0;
@@ -109,7 +109,6 @@ a{color:#8ee5c2}.error{color:#ff9b91}
       $("override").textContent = data.override ? "Активен" : "Нет";
       $("valid").textContent = data.valid;
       $("invalid").textContent = data.invalid;
-      $("start").disabled = !live;
       $("power-up").disabled = !live;
       $("power-down").disabled = !live;
       $("power-level").textContent = live
@@ -125,7 +124,6 @@ a{color:#8ee5c2}.error{color:#ff9b91}
   setInterval(() => {
     if (lastDataAt && Date.now() - lastDataAt > 6000) {
       setConnection("Телеметрия устарела", false);
-      $("start").disabled = true;
       $("power-up").disabled = true;
       $("power-down").disabled = true;
     }
