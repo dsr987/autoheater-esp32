@@ -133,6 +133,7 @@ bool enqueueWriteFloat(uint8_t reg, float value) {
 bool enqueueRead(uint8_t reg) {
   uint8_t frame[6] = {0xA5, 0x30, 0x00, 0x01, reg, 0};
   frame[5] = crc8Maxim(frame, 5);
+  pendingRegister = reg;
   return enqueueFrame(frame, sizeof(frame));
 }
 
