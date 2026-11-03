@@ -38,6 +38,9 @@ jobs:
       - name: Prepare Arduino sketch
         run: python3 tools/prepare_sketch.py "$RUNNER_TEMP/Autoheater"
 
+      - name: Install ESP32 Python dependency
+        run: python -m pip install pyserial
+
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
