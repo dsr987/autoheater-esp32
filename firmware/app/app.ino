@@ -133,7 +133,6 @@ bool enqueueWriteFloat(uint8_t reg, float value) {
 bool enqueueRead(uint8_t reg) {
   uint8_t frame[6] = {0xA5, 0x30, 0x00, 0x01, reg, 0};
   frame[5] = crc8Maxim(frame, 5);
-  pendingRegister = reg;
   return enqueueFrame(frame, sizeof(frame));
 }
 
@@ -191,6 +190,7 @@ void injectTask() {
   TxFrame &frame = txQueue[txTail];
   HeaterSerial.write(frame.bytes, frame.length);
   HeaterSerial.flush();
+  if (frame.bytes[1] == 0x30 && frame.length == 6) pendingRegister = frame.bytes[4];
   suppressEchoUntil = millis() + 3;
   txTail = (txTail + 1) % TX_QUEUE_SIZE;
   nextTxAt = millis() + TX_REPEAT_GAP_MS;
