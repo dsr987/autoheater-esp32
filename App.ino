@@ -34,7 +34,7 @@ constexpr int PIN_HEATER_RX = 16, PIN_HEATER_TX = 17;
 constexpr int PIN_OLED_SDA = 21, PIN_OLED_SCL = 22;
 constexpr uint32_t HEATER_BAUD = 9600;
 constexpr uint32_t CONSOLE_BAUD = 115200;
-constexpr uint32_t FRAME_INTERBYTE_TIMEOUT_MS = 4;
+constexpr uint32_t FRAME_INTERBYTE_TIMEOUT_MS = 40;
 constexpr uint32_t TX_IDLE_GAP_MS = 25;
 constexpr uint32_t TX_REPEAT_GAP_MS = 21;
 constexpr uint32_t RESPONSE_TIMEOUT_MS = 80;
@@ -46,7 +46,7 @@ constexpr uint32_t OLED_UPDATE_INTERVAL_MS = 1000;
 constexpr size_t MAX_FRAME_DATA = 32;
 constexpr size_t TX_QUEUE_SIZE = 32;
 constexpr float POWER_LEVELS[] = {1000.0f, 1900.0f, 2800.0f, 3700.0f, 4600.0f};
-constexpr uint8_t POLL_REGISTERS[] = {0x50, 0x0C, 0x0B, 0x20, 0x24, 0x16, 0x10};
+constexpr uint8_t POLL_REGISTERS[] = {0x50, 0x0C, 0x0B, 0x20, 0x24, 0x16, 0x10, 0x01};
 
 HardwareSerial HeaterSerial(1);
 AsyncWebServer server(80);
@@ -130,7 +130,7 @@ struct TxFrame { uint8_t bytes[10] = {}; uint8_t length = 0; };
 TxFrame txQueue[TX_QUEUE_SIZE];
 size_t txHead = 0, txTail = 0;
 
-float panelPower = NAN, desiredPower = POWER_LEVELS[0];
+float panelPower = NAN, heaterPower = NAN, desiredPower = POWER_LEVELS[0];
 bool powerOverride = false, oledReady = false;
 uint8_t pendingRegister = 0xFF;
 bool awaitingResponse = false;
@@ -247,6 +247,13 @@ void handleHeaterFrame(const ParsedFrame &frame) {
     case 0x16:
       if (frame.length == 4) { heater.fanRpm = readU32LE(data); accepted = true; }
       break;
+    case 0x01: {
+      if (frame.length == 4) {
+        const float value = readFloatLE(data);
+        if (isfinite(value)) { heaterPower = value; accepted = true; }
+      }
+      break;
+    }
     default: break;
   }
   if (accepted) {
@@ -320,7 +327,6 @@ void injectTask() {
 }
 
 bool commandStart() {
-  if (!heaterIsLive()) return false;
   const size_t queued = (txHead + TX_QUEUE_SIZE - txTail) % TX_QUEUE_SIZE;
   if (queued + 6 >= TX_QUEUE_SIZE) return false;
   for (uint8_t i = 0; i < 3; ++i)
@@ -340,7 +346,8 @@ bool commandStop() {
 bool commandPower(int direction) {
   if (!heaterIsLive()) return false;
   const float current = powerOverride ? desiredPower :
-      (isfinite(panelPower) && panelPower >= 500.0f ? panelPower : POWER_LEVELS[0]);
+      (isfinite(heaterPower) && heaterPower >= 500.0f ? heaterPower :
+       (isfinite(panelPower) && panelPower >= 500.0f ? panelPower : POWER_LEVELS[0]));
   size_t closest = 0;
   float smallestDifference = INFINITY;
   for (size_t i = 0; i < 5; ++i) {
@@ -371,6 +378,7 @@ const char *stateName(uint8_t state) {
     case 0x25: return "Пламя поймано";
     case 0x27: return "Набор мощности";
     case 0x2F: return "Выход на режим";
+    case 0x38: return "Переход";
     case 0x2E: return "Установившееся горение";
     default: return "Неизвестное состояние";
   }
@@ -456,6 +464,7 @@ void setup() {
   delay(200);
   Serial.println("\nAutoheater ESP32 v0.0.1");
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+  Wire.setClock(400000);
   oledReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   if (!oledReady) Serial.println("[OLED] Display not found at 0x3C");
 
