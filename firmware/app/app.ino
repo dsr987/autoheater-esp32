@@ -43,8 +43,11 @@ struct HeaterState {
 float panelPower = NAN, desiredPower = 1000;
 bool powerOverride = false, busEverSeen = false;
 uint8_t pendingRegister = 0xFF;
-uint32_t lastRxMs = 0, nextTxAt = 0, suppressEchoUntil = 0;
+uint32_t lastRxMs = 0, nextTxAt = 0;
 uint32_t lastSilentPollMs = 0, validFrames = 0, invalidFrames = 0;
+uint8_t echoBuffer[10] = {};
+size_t echoLength = 0, echoIndex = 0;
+uint32_t echoDeadline = 0;
 
 uint8_t crc8Maxim(const uint8_t *data, size_t length) {
   uint8_t crc = 0;
@@ -177,7 +180,15 @@ void pumpRx() {
     const int incoming = HeaterSerial.read();
     if (incoming < 0) continue;
     const uint32_t now = millis();
-    if (now < suppressEchoUntil) continue;
+    if (echoIndex < echoLength && now <= echoDeadline &&
+        uint8_t(incoming) == echoBuffer[echoIndex]) {
+      if (++echoIndex == echoLength) { echoLength = 0; echoIndex = 0; }
+      continue;
+    }
+    // A mismatch means the next byte is not our local TX echo. This also
+    // allows an A0 heater response to be parsed immediately after TX.
+    echoLength = 0;
+    echoIndex = 0;
     lastRxMs = now;
     ParsedFrame frame;
     if (parser.feed(uint8_t(incoming), frame)) onFrame(frame);
@@ -188,10 +199,13 @@ void injectTask() {
   const uint32_t now = millis();
   if (now < nextTxAt || now - lastRxMs < TX_IDLE_GAP_MS) return;
   TxFrame &frame = txQueue[txTail];
+  memcpy(echoBuffer, frame.bytes, frame.length);
+  echoLength = frame.length;
+  echoIndex = 0;
+  echoDeadline = millis() + 30;
   HeaterSerial.write(frame.bytes, frame.length);
   HeaterSerial.flush();
   if (frame.bytes[1] == 0x30 && frame.length == 6) pendingRegister = frame.bytes[4];
-  suppressEchoUntil = millis() + 3;
   txTail = (txTail + 1) % TX_QUEUE_SIZE;
   nextTxAt = millis() + TX_REPEAT_GAP_MS;
 }
