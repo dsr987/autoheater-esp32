@@ -55,7 +55,7 @@ For release automation changes:
 
 This project interfaces with a diesel heater and its controller. Hardware safety takes priority over convenience.
 
-- Treat the BM/control line as **receive-only** unless the owner explicitly approves a separately reviewed transmit design. Do not add code that transmits onto the heater bus.
+- The current project protocol is defined by `docs/HEATER_PROTOCOL.md`. The documented design includes limited half-duplex transmission for the exact start, stop, read, and power frames specified there. Do not transmit undocumented commands or change frame timing/CRC without a protocol review. TX must use the documented diode-isolated circuit; never connect an ESP32 TX GPIO directly to the 5 V bus. Software/CI verification is not hardware validation. Any expansion beyond the documented commands requires explicit owner approval and a separate safety review.
 - ESP32 GPIOs are not 5 V tolerant. Never connect a potentially 5 V signal directly to an ESP32 input. Confirm signal levels and use a suitable level-shifting/protection circuit before hardware testing.
 - Do not infer connector pinouts, voltage levels, chip identities, or signal direction from appearance alone. Mark uncertain observations as hypotheses and request continuity/voltage measurements or clear photos.
 - Do not claim hardware was tested when only code, compilation, simulation, or CI was checked. State exactly what was verified.
