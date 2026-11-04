@@ -14,7 +14,6 @@ def main():
     FACTORY.mkdir(parents=True, exist_ok=True)
 
     shutil.copyfile(ROOT / "App.ino", FACTORY / "factory.ino")
-    shutil.copyfile(ROOT / "partitions.csv", FACTORY / "partitions.csv")
 
     subprocess.run(
         [

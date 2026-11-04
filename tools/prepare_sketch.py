@@ -16,7 +16,6 @@ def main():
     output = Path(sys.argv[1]).resolve()
     output.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "App.ino", output / "Autoheater.ino")
-    shutil.copy2(ROOT / "partitions.csv", output / "partitions.csv")
     subprocess.run(
         [
             sys.executable,
