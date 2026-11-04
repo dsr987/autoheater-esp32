@@ -67,6 +67,7 @@ jobs:
           arduino-cli lib install "Adafruit BusIO"
 
       - name: Compile firmware and factory image
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist "$RUNNER_TEMP/factory-build"
@@ -82,13 +83,15 @@ jobs:
           test -s "$BUILD/factory.ino.partitions.bin"
           ESPTOOL="$(find "$HOME/.arduino15/packages/esp32/tools/esptool_py" -type f -name esptool.py -print -quit)"
           BOOT_APP0="$HOME/.arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/boot_app0.bin"
+          DEFAULT_PARTITIONS="$HOME/.arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/default.csv"
           test -s "$ESPTOOL"
           test -s "$BOOT_APP0"
+          test -s "$DEFAULT_PARTITIONS"
 
           APP_SIZE="$(stat -c%s "$BUILD/factory.ino.bin")"
-          OTA_SLOT_SIZE=$((0x1E0000))
+          OTA_SLOT_SIZE=$((0x140000))
           if [ "$APP_SIZE" -gt "$OTA_SLOT_SIZE" ]; then
-            echo "::error::Firmware image ($APP_SIZE bytes) exceeds OTA slot ($OTA_SLOT_SIZE bytes)"
+            echo "::error::Firmware image ($APP_SIZE bytes) exceeds standard OTA slot ($OTA_SLOT_SIZE bytes)"
             exit 1
           fi
 
