@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^[[:space:]]*\\*[[:space:]]*FIRMWARE_VERSION:[[:space:]]*//p' App.ino | head -n 1 | tr -d '\\r')"
+          version="$(grep -m1 'FIRMWARE_VERSION:' App.ino | sed 's/.*FIRMWARE_VERSION: //')"
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
