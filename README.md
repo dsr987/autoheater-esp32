@@ -71,7 +71,7 @@ python3 tools/extract_changelog.py
 python3 tools/update_readme_version.py
 ~~~
 
-Скрипты обновят CHANGELOG.md и версию в этом README. GitHub Actions проверяет синхронизацию и собирает app-only бинарник прошивки; универсальная Factory собирается отдельно в репозитории esp32-factory. GitHub Release только для тега vX.Y.Z, совпадающего с версией в App.ino.
+Скрипты обновят CHANGELOG.md и версию в этом README. GitHub Actions проверяет синхронизацию, собирает app-only бинарник прошивки и публикует GitHub Release только для тега vX.Y.Z, совпадающего с версией в App.ino. Универсальная Factory собирается отдельно в репозитории [esp32-factory](https://github.com/dsr987/esp32-factory).
 
 ## Проверка
 
