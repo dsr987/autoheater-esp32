@@ -46,7 +46,7 @@ GND должна быть общей. DATA-шина имеет уровень о
 
 Для Autoheater выбирай **Basic**. Прошивка предназначена для мониторинга и управления отопителем, не содержит тяжёлой графики и не хранит большие локальные журналы, поэтому стандартной разметки достаточно. Basic совпадает с таблицей Arduino ESP32 Core 2.0.9: два OTA-слота по `0x140000` байт каждый. NVS остаётся на стандартном месте и используется библиотекой `Preferences`.
 
-1. Скачай комплект из [последнего GitHub Release ESP32 Factory](https://github.com/dsr987/esp32-factory/releases/tag/Release).
+1. Скачай комплект из [GitHub Release ESP32 Factory](https://github.com/dsr987/esp32-factory/releases/tag/Release).
 2. Запусти `ESP32-Auto-Flasher.bat` и выбери **Factory Reset → Basic**. Эта операция полностью стирает Flash и устанавливает универсальную Factory с нужной таблицей разделов.
 3. Подключись к Wi-Fi `ESP32`, пароль `12345678`.
 4. Открой `http://192.168.4.1/update`. Логин и пароль ElegantOTA: `admin` / `admin`.
