@@ -18,8 +18,7 @@
 |---|---|
 | App.ino | Единственный исходник прошивки |
 | index.html | Единственный исходник веб-интерфейса |
-| factory/factory.ino | Самостоятельный скетч для первой установки, генерируется из App.ino |
-| factory/web_page.h | HTML, встроенный в factory-скетч |
+| tools/prepare_sketch.py | Подготовка временного скетча из App.ino и index.html для сборки |
 | docs/HEATER_PROTOCOL.md | Формат кадров, CRC, регистры и команды |
 | docs/HARDWARE_ASSEMBLY.md | Полная инструкция по сборке и подключению |
 | docs/METHODOLOGY.md | Методика анализа и проверки протокола |
@@ -43,38 +42,19 @@ GND должна быть общей. DATA-шина имеет уровень о
 
 ## Первая установка по USB
 
-Для классической ESP32 DevKit с flash 4 МБ используйте **factory.bin** из артефакта GitHub Actions или GitHub Release. Это единый образ с загрузчиком, стандартной таблицей разделов Arduino-ESP32, начальными данными OTA и приложением. Пользовательская таблица разделов проекту не требуется.
+Для новой классической ESP32 DevKit с Flash 4 МБ используй общую заводскую прошивку из отдельного репозитория [ESP32 Factory](https://github.com/dsr987/esp32-factory).
 
-Стандартная таблица default.csv в Arduino-ESP32 2.0.9 содержит два OTA-раздела приложения по 0x140000 байт каждый (1 310 720 байт, около 1,25 МиБ). Это оставляет место для прошивки размером до 1 МБ с запасом. CI проверяет, что бинарник приложения помещается в OTA-раздел.
+Для Autoheater выбирай **Basic**. Он совпадает со стандартной таблицей Arduino ESP32 2.0.9: два OTA-слота по `0x140000` байт каждый. NVS остаётся на стандартном месте и используется библиотекой `Preferences`.
 
-1. Скачайте и распакуйте артефакт autoheater-esp32-firmware либо скачайте файлы из GitHub Release.
-2. Установите esptool 4.x:
+1. Скачай комплект из GitHub Actions artifact успешной сборки репозитория [ESP32 Factory](https://github.com/dsr987/esp32-factory).
+2. Запусти `ESP32-Auto-Flasher.bat` и выбери **Factory Reset → Basic**. Эта операция полностью стирает Flash и устанавливает универсальную Factory с нужной таблицей разделов.
+3. Подключись к Wi-Fi `ESP32`, пароль `12345678`.
+4. Открой `http://192.168.4.1/update`. Логин и пароль ElegantOTA: `admin` / `admin`.
+5. Загрузи app-only файл `autoheater-esp32.bin` из артефакта сборки или GitHub Release этого проекта.
 
-   ~~~bash
-   python -m pip install "esptool<5"
-   ~~~
+После обновления Factory заменится прошивкой Autoheater, а точка доступа станет `Autoheater`.
 
-3. Определите COM-порт платы и выполните:
-
-   ~~~bash
-   python -m esptool --chip esp32 --port COM5 erase_flash
-   python -m esptool --chip esp32 --port COM5 --baud 460800 write_flash -z 0x0 factory.bin
-   ~~~
-
-   В Linux вместо COM5 укажите, например, /dev/ttyUSB0.
-
-4. После завершения записи перезапустите плату. Она создаст точку доступа Autoheater; веб-интерфейс доступен по адресу http://192.168.4.1/.
-
-**Важно:** перед прошивкой убедитесь, что плата имеет flash 4 МБ. Команда erase_flash полностью стирает содержимое ESP32. factory.bin предназначен для первой установки по USB и не используется для обычного OTA.
-
-### Первая установка через Arduino IDE
-
-1. Откройте папку factory/ как скетч.
-2. Выберите плату ESP32 Dev Module.
-3. В меню **Tools → Partition Scheme** оставьте стандартную схему **Default 4MB with spiffs** (или соответствующую стандартную схему с двумя OTA-слотами в установленной версии core).
-4. Выберите COM-порт и нажмите Upload.
-
-Не выбирайте пользовательскую таблицу разделов: её больше нет в проекте.
+**Важно:** Factory Reset стирает всё содержимое Flash, включая сохранённые настройки `Preferences`. Для обычных обновлений используй только app-only `autoheater-esp32.bin` через ElegantOTA. Повторно выполнять Factory Reset не нужно.
 
 ## Обновление по OTA
 
@@ -91,7 +71,7 @@ python3 tools/extract_changelog.py
 python3 tools/update_readme_version.py
 ~~~
 
-Скрипты обновят CHANGELOG.md и версию в этом README. GitHub Actions проверяет синхронизацию, собирает оба бинарника и публикует GitHub Release только для тега vX.Y.Z, совпадающего с версией в App.ino.
+Скрипты обновят CHANGELOG.md и версию в этом README. GitHub Actions проверяет синхронизацию и собирает app-only бинарник прошивки; универсальная Factory собирается отдельно в репозитории esp32-factory. GitHub Release только для тега vX.Y.Z, совпадающего с версией в App.ino.
 
 ## Проверка
 
