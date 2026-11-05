@@ -87,6 +87,9 @@ jobs:
             exit 1
           fi
 
+      - name: Install ESP32 Python dependency
+        run: python -m pip install pyserial
+
       - name: Install libraries
         run: |
           set -euo pipefail
