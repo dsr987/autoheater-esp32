@@ -52,15 +52,6 @@ jobs:
           python3 tools/update_readme_version.py
           git diff --exit-code -- CHANGELOG.md README.md
 
-      - name: Prepare factory sketch
-        run: |
-          set -euo pipefail
-          python3 tools/prepare_factory.py
-          git diff --exit-code -- factory/
-
-      - name: Install ESP32 Python dependency
-        run: python -m pip install pyserial
-
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
@@ -83,50 +74,33 @@ jobs:
           arduino-cli lib install "Adafruit GFX Library"
           arduino-cli lib install "Adafruit BusIO"
 
-      - name: Compile firmware and factory image
+      - name: Prepare project sketch
+        run: python3 tools/prepare_sketch.py "$RUNNER_TEMP/Autoheater"
+
+      - name: Compile Autoheater firmware
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist "$RUNNER_TEMP/factory-build"
+          mkdir -p dist "$RUNNER_TEMP/autoheater-build"
           arduino-cli compile \
             --fqbn esp32:esp32:esp32 \
             --build-property compiler.cpp.extra_flags="-DELEGANTOTA_USE_ASYNC_WEBSERVER=1" \
-            --build-path "$RUNNER_TEMP/factory-build" \
-            factory
+            --build-path "$RUNNER_TEMP/autoheater-build" \
+            "$RUNNER_TEMP/Autoheater"
 
-          BUILD="$RUNNER_TEMP/factory-build"
-          test -s "$BUILD/factory.ino.bin"
-          test -s "$BUILD/factory.ino.bootloader.bin"
-          test -s "$BUILD/factory.ino.partitions.bin"
-          ESPTOOL="$(find "$HOME/.arduino15/packages/esp32/tools/esptool_py" -type f -name esptool.py -print -quit)"
-          BOOT_APP0="$HOME/.arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/boot_app0.bin"
-          DEFAULT_PARTITIONS="$HOME/.arduino15/packages/esp32/hardware/esp32/2.0.9/tools/partitions/default.csv"
-          test -s "$ESPTOOL"
-          test -s "$BOOT_APP0"
-          test -s "$DEFAULT_PARTITIONS"
+          BUILD="$RUNNER_TEMP/autoheater-build"
+          APP="$BUILD/Autoheater.ino.bin"
+          test -s "$APP"
 
-          APP_SIZE="$(stat -c%s "$BUILD/factory.ino.bin")"
+          APP_SIZE="$(stat -c%s "$APP")"
           OTA_SLOT_SIZE=$((0x140000))
           if [ "$APP_SIZE" -gt "$OTA_SLOT_SIZE" ]; then
-            echo "::error::Firmware image ($APP_SIZE bytes) exceeds standard OTA slot ($OTA_SLOT_SIZE bytes)"
+            echo "::error::Autoheater app ($APP_SIZE bytes) exceeds Basic OTA slot ($OTA_SLOT_SIZE bytes)"
             exit 1
           fi
 
-          cp "$BUILD/factory.ino.bin" dist/autoheater-esp32.bin
-          python3 "$ESPTOOL" --chip esp32 merge_bin \
-            -o dist/factory.bin \
-            0x1000 "$BUILD/factory.ino.bootloader.bin" \
-            0x8000 "$BUILD/factory.ino.partitions.bin" \
-            0xE000 "$BOOT_APP0" \
-            0x10000 "$BUILD/factory.ino.bin"
-          test -s dist/factory.bin
-          FACTORY_SIZE="$(stat -c%s dist/factory.bin)"
-          if [ "$FACTORY_SIZE" -gt 4194304 ]; then
-            echo "::error::Factory image exceeds 4 MiB flash size ($FACTORY_SIZE bytes)"
-            exit 1
-          fi
+          cp "$APP" dist/autoheater-esp32.bin
           sha256sum dist/autoheater-esp32.bin > dist/autoheater-esp32.bin.sha256
-          sha256sum dist/factory.bin > dist/factory.bin.sha256
 
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -173,7 +147,5 @@ jobs:
           files: |
             dist/autoheater-esp32.bin
             dist/autoheater-esp32.bin.sha256
-            dist/factory.bin
-            dist/factory.bin.sha256
           fail_on_unmatched_files: true
           make_latest: true
