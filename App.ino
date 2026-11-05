@@ -1,9 +1,10 @@
 /*
  * Autoheater ESP32
- * FIRMWARE_VERSION: 0.0.1
+ * FIRMWARE_VERSION: 0.0.2
  * CHANGELOG_START
  * - Первая рабочая реализация протокола A5/A0: телеметрия, управление и веб-интерфейс.
  * - Встроены CRC-8/MAXIM, контроль тайм-аутов ответов и тихий опрос после остановки штатного пульта.
+ * - Пуск доступен без телеметрии; приоритет heaterPower при отображении мощности; поле hp.
  * CHANGELOG_END
  *
  * Единственный исходник прошивки. index.html в корне репозитория встраивается
@@ -387,18 +388,22 @@ const char *stateName(uint8_t state) {
 void broadcastState() {
   if (!websocket.count()) return;
   const bool live = heaterIsLive();
-  const float shownPower = powerOverride ? desiredPower : panelPower;
-  char json[360];
+  const float shownPower = powerOverride ? desiredPower :
+      (isfinite(heaterPower) ? heaterPower : panelPower);
+  char json[384];
+  char heaterPowerJson[24];
+  if (isfinite(heaterPower)) snprintf(heaterPowerJson, sizeof(heaterPowerJson), "%.0f", heaterPower);
+  else strcpy(heaterPowerJson, "null");
   snprintf(json, sizeof(json),
     "{\"st\":%u,\"step\":%u,\"err\":\"%02X\",\"t\":%.1f,\"v\":%.2f,"
-    "\"fan\":%lu,\"dose\":%lu,\"tp\":%.1f,\"pw\":%.0f,"
+    "\"fan\":%lu,\"dose\":%lu,\"tp\":%.1f,\"pw\":%.0f,\"hp\":%s,"
     "\"override\":%s,\"live\":%s,\"valid\":%lu,\"invalid\":%lu}",
     heater.state, heater.step, heater.error,
     isfinite(heater.nodeTemperature) ? heater.nodeTemperature : 0.0f,
     isfinite(heater.voltage) ? heater.voltage : 0.0f,
     (unsigned long)heater.fanRpm, (unsigned long)heater.fuelDoses,
     isfinite(heater.panelTemperature) ? heater.panelTemperature : 0.0f,
-    isfinite(shownPower) ? shownPower : 0.0f,
+    isfinite(shownPower) ? shownPower : 0.0f, heaterPowerJson,
     powerOverride ? "true" : "false", live ? "true" : "false",
     (unsigned long)validFrames, (unsigned long)invalidFrames);
   websocket.textAll(json);
@@ -406,7 +411,8 @@ void broadcastState() {
 
 void drawOled() {
   if (!oledReady) return;
-  const float shownPower = powerOverride ? desiredPower : panelPower;
+  const float shownPower = powerOverride ? desiredPower :
+      (isfinite(heaterPower) ? heaterPower : panelPower);
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
@@ -462,7 +468,7 @@ void setupWeb() {
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(200);
-  Serial.println("\nAutoheater ESP32 v0.0.1");
+  Serial.println("\nAutoheater ESP32 v0.0.2");
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
   Wire.setClock(400000);
   oledReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
