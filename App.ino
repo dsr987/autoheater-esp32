@@ -270,7 +270,7 @@ String buildDiagnosticsReport() {
     switch(entry.kind){
       case DIAG_UNKNOWN_STATE:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_STATE register=0x%02X code=0x%02X",h,m,s,frac,entry.reg,entry.code);break;
       case DIAG_UNKNOWN_ERROR:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_ERROR register=0x%02X code=0x%02X",h,m,s,frac,entry.reg,entry.code);break;
-      case DIAG_UNKNOWN_REGISTER:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_REGISTER code=0x%02X response_length=%u",h,m,s,frac,entry.code,entry.length);break;
+      case DIAG_UNKNOWN_REGISTER:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_REGISTER code=0x%02X frame_length=%u",h,m,s,frac,entry.code,entry.length);break;
       default:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_FRAME sync=0x%02X command=0x%02X length=%u pending_register=0x%02X",h,m,s,frac,entry.sync,entry.command,entry.length,entry.reg);break;
     }
     report+=line;report+="\n";
