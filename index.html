@@ -64,7 +64,7 @@ body.is-fullscreen #fullscreen-overlay{display:none}
 <div class="modal-header"><h2 id="diagnostics-title">Диагностика</h2><button id="close-diagnostics" type="button" aria-label="Закрыть">×</button></div>
 <div class="diagnostic-stats"><div class="stat"><span>Валидные кадры</span><strong id="diag-valid">0</strong></div><div class="stat"><span>Ошибки CRC</span><strong id="diag-crc">0</strong></div><div class="stat"><span>Потеряно записей</span><strong id="diag-dropped">0</strong></div></div>
 <div class="log-actions"><button id="copy-log" type="button">Копировать лог</button><button id="save-log" type="button">Сохранить TXT</button></div><pre id="diagnostic-log">Загрузка диагностического журнала…</pre>
-<p id="diagnostic-hint">Временные метки отсчитываются от запуска ESP32. В журнал попадают только неизвестные или неподтверждённые коды.</p></section></div>
+<p id="diagnostic-hint">Временные метки отсчитываются от запуска ESP32. Журнал хранит последние 64 события в RAM до перезагрузки; при переполнении старые записи заменяются новыми.</p></section></div>
 <script>
 (()=>{
 const $=id=>document.getElementById(id);
