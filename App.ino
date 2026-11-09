@@ -431,17 +431,19 @@ void silentPollTask(uint32_t now) {
 }
 
 const char *stateName(uint8_t state) {
+  // Встроенный шрифт Adafruit GFX не содержит кириллицу.
+  // Используем ASCII, чтобы OLED не показывал нечитаемые символы.
   switch (state) {
-    case 0x00: return "Ожидание (гипотеза)";
-    case 0x04: return "Продувка после остановки (гипотеза)";
-    case 0x20: return "Свеча / прогрев";
-    case 0x24: return "Розжиг";
-    case 0x25: return "Пламя поймано";
-    case 0x27: return "Набор мощности";
-    case 0x2F: return "Выход на режим";
-    case 0x38: return "Переход";
-    case 0x2E: return "Установившееся горение";
-    default: return "Неизвестное состояние";
+    case 0x00: return "WAIT*";
+    case 0x04: return "PURGE*";
+    case 0x20: return "GLOW";
+    case 0x24: return "IGNITION";
+    case 0x25: return "FLAME";
+    case 0x27: return "RAMP UP";
+    case 0x2F: return "READY";
+    case 0x38: return "TRANSITION";
+    case 0x2E: return "RUN";
+    default: return "UNKNOWN";
   }
 }
 
