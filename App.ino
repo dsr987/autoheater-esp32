@@ -1,10 +1,12 @@
 /*
  * Autoheater ESP32
- * FIRMWARE_VERSION: 0.0.2
+ * FIRMWARE_VERSION: 0.0.3
  * CHANGELOG_START
  * - Первая рабочая реализация протокола A5/A0: телеметрия, управление и веб-интерфейс.
  * - Встроены CRC-8/MAXIM, контроль тайм-аутов ответов и тихий опрос после остановки штатного пульта.
  * - Пуск доступен без телеметрии; приоритет heaterPower при отображении мощности; поле hp.
+ * - Обновлён мобильный Web GUI: полноэкранный портретный режим и индикаторы Wi-Fi/override.
+ * - Добавлен журнал неизвестных кодов с временными метками, просмотром и TXT-экспортом.
  * CHANGELOG_END
  *
  * Единственный исходник прошивки. index.html в корне репозитория встраивается
@@ -16,6 +18,8 @@
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
@@ -58,6 +62,7 @@ struct HeaterState {
   uint8_t state = 0, step = 0, error = 0xFF;
   float nodeTemperature = NAN, voltage = NAN, panelTemperature = NAN;
   uint32_t fanRpm = 0, fuelDoses = 0, lastResponseMs = 0;
+  bool stateReceived = false, errorReceived = false;
 } heater;
 
 struct ParsedFrame {
@@ -143,6 +148,19 @@ uint32_t lastRxMs = 0, lastPanelActivityMs = 0, nextTxAtMs = 0;
 uint32_t lastSilentPollMs = 0, lastUiUpdateMs = 0, lastOledUpdateMs = 0;
 uint32_t validFrames = 0, invalidFrames = 0;
 uint8_t silentPollIndex = 0;
+constexpr size_t DIAGNOSTIC_LOG_CAPACITY = 64;
+enum DiagnosticKind : uint8_t { DIAG_UNKNOWN_STATE, DIAG_UNKNOWN_ERROR, DIAG_UNKNOWN_REGISTER, DIAG_UNKNOWN_FRAME };
+struct DiagnosticEntry {
+  uint32_t atMs = 0;
+  uint8_t kind = 0, code = 0, reg = 0xFF, sync = 0, command = 0;
+  uint16_t length = 0;
+};
+DiagnosticEntry diagnosticLog[DIAGNOSTIC_LOG_CAPACITY];
+size_t diagnosticHead = 0, diagnosticCount = 0;
+uint32_t diagnosticDropped = 0;
+portMUX_TYPE diagnosticMux = portMUX_INITIALIZER_UNLOCKED;
+uint32_t lastUnknownFrameSignature = 0, lastUnknownFrameAtMs = 0;
+uint32_t lastUnknownRegisterSignature = 0, lastUnknownRegisterAtMs = 0;
 
 uint32_t readU32LE(const uint8_t *p) {
   return uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
@@ -194,84 +212,126 @@ void expirePendingResponse(uint32_t now) {
     clearPendingResponse();
 }
 
-void handlePanelFrame(const ParsedFrame &frame) {
-  lastPanelActivityMs = millis();
-  if (frame.command == 0x30 && frame.length == 1) {
-    pendingRegister = frame.data[0];
-    awaitingResponse = true;
-    responseDeadlineMs = millis() + RESPONSE_TIMEOUT_MS;
-  } else if (frame.command == 0x01 && frame.length == 5 && frame.data[0] == 0x01) {
-    const float incomingPower = readFloatLE(frame.data + 1);
-    if (!isfinite(incomingPower)) return;
-    panelPower = incomingPower;
-    if (powerOverride && fabsf(incomingPower - desiredPower) > 0.5f)
-      enqueueWriteFloat(0x01, desiredPower);
-  } else if (frame.command == 0x20 && frame.length == 5 && frame.data[0] == 0x00) {
-    const float temperature = readFloatLE(frame.data + 1);
-    if (isfinite(temperature)) heater.panelTemperature = temperature;
+bool isConfirmedHeaterState(uint8_t state) {
+  switch (state) {
+    case 0x20: case 0x24: case 0x25: case 0x27: case 0x2F: case 0x38: case 0x2E:
+      return true;
+    default: // 0x00 and 0x04 are observed after STOP, but remain hypotheses.
+      return false;
   }
+}
+bool isKnownRegister(uint8_t reg) {
+  switch (reg) {
+    case 0x50: case 0x0C: case 0x0B: case 0x20: case 0x24: case 0x16: case 0x10: case 0x01:
+      return true;
+    default: return false;
+  }
+}
+void addDiagnosticEntry(uint8_t kind,uint8_t code,uint8_t reg,uint8_t sync,uint8_t command,uint16_t length) {
+  DiagnosticEntry entry;
+  entry.atMs=millis();entry.kind=kind;entry.code=code;entry.reg=reg;entry.sync=sync;entry.command=command;entry.length=length;
+  portENTER_CRITICAL(&diagnosticMux);
+  diagnosticLog[diagnosticHead]=entry;
+  diagnosticHead=(diagnosticHead+1)%DIAGNOSTIC_LOG_CAPACITY;
+  if(diagnosticCount<DIAGNOSTIC_LOG_CAPACITY)++diagnosticCount;else++diagnosticDropped;
+  portEXIT_CRITICAL(&diagnosticMux);
+}
+void incrementValidFrames(){portENTER_CRITICAL(&diagnosticMux);++validFrames;portEXIT_CRITICAL(&diagnosticMux);}
+void incrementCrcErrors(){portENTER_CRITICAL(&diagnosticMux);++invalidFrames;portEXIT_CRITICAL(&diagnosticMux);}
+void logUnknownFrame(const ParsedFrame &frame,uint8_t reg) {
+  const uint32_t signature=(uint32_t(frame.sync)<<24)|(uint32_t(frame.command)<<16)|(uint32_t(reg)<<8)|frame.length;
+  const uint32_t now=millis();
+  if(signature==lastUnknownFrameSignature&&uint32_t(now-lastUnknownFrameAtMs)<1000)return;
+  lastUnknownFrameSignature=signature;lastUnknownFrameAtMs=now;
+  addDiagnosticEntry(DIAG_UNKNOWN_FRAME,0,reg,frame.sync,frame.command,frame.length);
+}
+void logUnknownRegister(uint8_t reg,const ParsedFrame &frame) {
+  const uint32_t signature=(uint32_t(frame.sync)<<24)|(uint32_t(frame.command)<<16)|(uint32_t(reg)<<8)|frame.length;
+  const uint32_t now=millis();
+  if(signature==lastUnknownRegisterSignature&&uint32_t(now-lastUnknownRegisterAtMs)<1000)return;
+  lastUnknownRegisterSignature=signature;lastUnknownRegisterAtMs=now;
+  addDiagnosticEntry(DIAG_UNKNOWN_REGISTER,reg,reg,frame.sync,frame.command,frame.length);
+}
+String buildDiagnosticsReport() {
+  DiagnosticEntry snapshot[DIAGNOSTIC_LOG_CAPACITY];
+  size_t count=0;uint32_t dropped=0,valid=0,crcErrors=0;
+  portENTER_CRITICAL(&diagnosticMux);
+  count=diagnosticCount;dropped=diagnosticDropped;valid=validFrames;crcErrors=invalidFrames;
+  const size_t first=(diagnosticHead+DIAGNOSTIC_LOG_CAPACITY-count)%DIAGNOSTIC_LOG_CAPACITY;
+  for(size_t i=0;i<count;++i)snapshot[i]=diagnosticLog[(first+i)%DIAGNOSTIC_LOG_CAPACITY];
+  portEXIT_CRITICAL(&diagnosticMux);
+  String report;report.reserve(7500);
+  report+="valid_frames=";report+=String(valid);report+="\n";
+  report+="crc_errors=";report+=String(crcErrors);report+="\n";
+  report+="log_overwritten=";report+=String(dropped);report+="\n";
+  report+="timestamp_basis=milliseconds since ESP32 boot\n--- LOG ---\n";
+  for(size_t i=0;i<count;++i){
+    const DiagnosticEntry &entry=snapshot[i];
+    const unsigned long ms=entry.atMs,h=ms/3600000UL,m=(ms/60000UL)%60UL,s=(ms/1000UL)%60UL,frac=ms%1000UL;
+    char line[144];
+    switch(entry.kind){
+      case DIAG_UNKNOWN_STATE:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_STATE register=0x%02X code=0x%02X",h,m,s,frac,entry.reg,entry.code);break;
+      case DIAG_UNKNOWN_ERROR:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_ERROR register=0x%02X code=0x%02X",h,m,s,frac,entry.reg,entry.code);break;
+      case DIAG_UNKNOWN_REGISTER:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_REGISTER code=0x%02X response_length=%u",h,m,s,frac,entry.code,entry.length);break;
+      default:snprintf(line,sizeof(line),"[%lu:%02lu:%02lu.%03lu] UNKNOWN_FRAME sync=0x%02X command=0x%02X length=%u pending_register=0x%02X",h,m,s,frac,entry.sync,entry.command,entry.length,entry.reg);break;
+    }
+    report+=line;report+="\n";
+  }
+  if(!count)report+="Пока неизвестных или неподтверждённых кодов не обнаружено.\n";
+  return report;
+}
+
+void handlePanelFrame(const ParsedFrame &frame) {
+  lastPanelActivityMs=millis();bool recognized=false;
+  if(frame.command==0x30&&frame.length==1){
+    pendingRegister=frame.data[0];awaitingResponse=true;responseDeadlineMs=millis()+RESPONSE_TIMEOUT_MS;recognized=true;
+    if(!isKnownRegister(pendingRegister))logUnknownRegister(pendingRegister,frame);
+  }else if(frame.command==0x01&&frame.length==5&&frame.data[0]==0x01){
+    const float incomingPower=readFloatLE(frame.data+1);if(!isfinite(incomingPower))return;
+    panelPower=incomingPower;recognized=true;
+    if(powerOverride&&fabsf(incomingPower-desiredPower)>0.5f)enqueueWriteFloat(0x01,desiredPower);
+  }else if(frame.command==0x01&&frame.length==2&&(frame.data[0]==0x02||frame.data[0]==0x03)){recognized=true;}
+  else if(frame.command==0x20&&frame.length==5&&(frame.data[0]==0x00||frame.data[0]==0x01)){
+    if(frame.data[0]==0x00){const float t=readFloatLE(frame.data+1);if(isfinite(t))heater.panelTemperature=t;}
+    recognized=true;
+  }
+  if(!recognized)logUnknownFrame(frame,0xFF);
 }
 
 void handleHeaterFrame(const ParsedFrame &frame) {
-  if (frame.command != 0x00 || (frame.length != 1 && frame.length != 4)) return;
-  if (!awaitingResponse || int32_t(millis() - responseDeadlineMs) >= 0) return;
-
-  const uint8_t *data = frame.data;
-  bool accepted = false;
-  switch (pendingRegister) {
+  if(frame.command!=0x00){logUnknownFrame(frame,pendingRegister);return;}
+  if(!awaitingResponse||int32_t(millis()-responseDeadlineMs)>=0){logUnknownFrame(frame,0xFF);return;}
+  if(frame.length!=1&&frame.length!=4){logUnknownFrame(frame,pendingRegister);clearPendingResponse();return;}
+  const uint8_t *data=frame.data;bool accepted=false;
+  switch(pendingRegister){
     case 0x0B:
-      if (frame.length == 1) { heater.error = data[0]; accepted = true; }
-      break;
-    case 0x0C:
-      if (frame.length == 4) { heater.step = uint8_t(readU32LE(data)); accepted = true; }
-      break;
+      if(frame.length==1){
+        if(data[0]!=0xFF&&(!heater.errorReceived||heater.error!=data[0]))addDiagnosticEntry(DIAG_UNKNOWN_ERROR,data[0],0x0B,frame.sync,frame.command,frame.length);
+        heater.error=data[0];heater.errorReceived=true;accepted=true;
+      }break;
+    case 0x0C:if(frame.length==4){heater.step=uint8_t(readU32LE(data));accepted=true;}break;
     case 0x50:
-      if (frame.length == 1) { heater.state = data[0]; accepted = true; }
-      break;
-    case 0x20: {
-      if (frame.length == 4) {
-        const float value = readFloatLE(data);
-        if (isfinite(value)) { heater.nodeTemperature = value; accepted = true; }
-      }
-      break;
-    }
-    case 0x24: {
-      if (frame.length == 4) {
-        const float value = readFloatLE(data);
-        if (isfinite(value)) { heater.voltage = value; accepted = true; }
-      }
-      break;
-    }
-    case 0x10:
-      if (frame.length == 4) { heater.fuelDoses = readU32LE(data); accepted = true; }
-      break;
-    case 0x16:
-      if (frame.length == 4) { heater.fanRpm = readU32LE(data); accepted = true; }
-      break;
-    case 0x01: {
-      if (frame.length == 4) {
-        const float value = readFloatLE(data);
-        if (isfinite(value)) { heaterPower = value; accepted = true; }
-      }
-      break;
-    }
-    default: break;
+      if(frame.length==1){
+        if(!isConfirmedHeaterState(data[0])&&(!heater.stateReceived||heater.state!=data[0]))addDiagnosticEntry(DIAG_UNKNOWN_STATE,data[0],0x50,frame.sync,frame.command,frame.length);
+        heater.state=data[0];heater.stateReceived=true;accepted=true;
+      }break;
+    case 0x20:{if(frame.length==4){const float v=readFloatLE(data);if(isfinite(v)){heater.nodeTemperature=v;accepted=true;}}break;}
+    case 0x24:{if(frame.length==4){const float v=readFloatLE(data);if(isfinite(v)){heater.voltage=v;accepted=true;}}break;}
+    case 0x10:if(frame.length==4){heater.fuelDoses=readU32LE(data);accepted=true;}break;
+    case 0x16:if(frame.length==4){heater.fanRpm=readU32LE(data);accepted=true;}break;
+    case 0x01:{if(frame.length==4){const float v=readFloatLE(data);if(isfinite(v)){heaterPower=v;accepted=true;}}break;}
+    default:logUnknownRegister(pendingRegister,frame);break;
   }
-  if (accepted) {
-    heater.lastResponseMs = millis();
-    ++validFrames;
-  }
+  if(accepted){heater.lastResponseMs=millis();incrementValidFrames();}
+  else if(isKnownRegister(pendingRegister))logUnknownFrame(frame,pendingRegister);
   clearPendingResponse();
 }
 
 void handleFrame(const ParsedFrame &frame) {
-  if (!frame.crcOk) { ++invalidFrames; return; }
-  if (frame.sync == 0xA5) {
-    ++validFrames;
-    handlePanelFrame(frame);
-  } else if (frame.sync == 0xA0) {
-    handleHeaterFrame(frame);
-  }
+  if(!frame.crcOk){incrementCrcErrors();return;}
+  if(frame.sync==0xA5){incrementValidFrames();handlePanelFrame(frame);}
+  else if(frame.sync==0xA0){handleHeaterFrame(frame);}
+  else logUnknownFrame(frame,0xFF);
 }
 
 bool consumeEcho(uint8_t byte, uint32_t now) {
@@ -374,6 +434,8 @@ void silentPollTask(uint32_t now) {
 
 const char *stateName(uint8_t state) {
   switch (state) {
+    case 0x00: return "Ожидание (гипотеза)";
+    case 0x04: return "Продувка после остановки (гипотеза)";
     case 0x20: return "Свеча / прогрев";
     case 0x24: return "Розжиг";
     case 0x25: return "Пламя поймано";
@@ -385,6 +447,13 @@ const char *stateName(uint8_t state) {
   }
 }
 
+int getStrongestApClientRssi() {
+  wifi_sta_list_t stations={};
+  if(esp_wifi_ap_get_sta_list(&stations)!=ESP_OK||stations.num==0)return -127;
+  int strongest=-127;
+  for(int i=0;i<stations.num;++i)if(stations.sta[i].rssi>strongest)strongest=stations.sta[i].rssi;
+  return strongest;
+}
 void broadcastState() {
   if (!websocket.count()) return;
   const bool live = heaterIsLive();
@@ -394,18 +463,18 @@ void broadcastState() {
   char heaterPowerJson[24];
   if (isfinite(heaterPower)) snprintf(heaterPowerJson, sizeof(heaterPowerJson), "%.0f", heaterPower);
   else strcpy(heaterPowerJson, "null");
-  snprintf(json, sizeof(json),
+  const int wifiRssi=getStrongestApClientRssi();
+  snprintf(json,sizeof(json),
     "{\"st\":%u,\"step\":%u,\"err\":\"%02X\",\"t\":%.1f,\"v\":%.2f,"
     "\"fan\":%lu,\"dose\":%lu,\"tp\":%.1f,\"pw\":%.0f,\"hp\":%s,"
-    "\"override\":%s,\"live\":%s,\"valid\":%lu,\"invalid\":%lu}",
-    heater.state, heater.step, heater.error,
-    isfinite(heater.nodeTemperature) ? heater.nodeTemperature : 0.0f,
-    isfinite(heater.voltage) ? heater.voltage : 0.0f,
-    (unsigned long)heater.fanRpm, (unsigned long)heater.fuelDoses,
-    isfinite(heater.panelTemperature) ? heater.panelTemperature : 0.0f,
-    isfinite(shownPower) ? shownPower : 0.0f, heaterPowerJson,
-    powerOverride ? "true" : "false", live ? "true" : "false",
-    (unsigned long)validFrames, (unsigned long)invalidFrames);
+    "\"override\":%s,\"live\":%s,\"rssi\":%d}",
+    heater.state,heater.step,heater.error,
+    isfinite(heater.nodeTemperature)?heater.nodeTemperature:0.0f,
+    isfinite(heater.voltage)?heater.voltage:0.0f,
+    (unsigned long)heater.fanRpm,(unsigned long)heater.fuelDoses,
+    isfinite(heater.panelTemperature)?heater.panelTemperature:0.0f,
+    isfinite(shownPower)?shownPower:0.0f,heaterPowerJson,
+    powerOverride?"true":"false",live?"true":"false",wifiRssi);
   websocket.textAll(json);
 }
 
@@ -439,6 +508,12 @@ void setupWeb() {
   });
   server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send(200, "application/json", "{\"ok\":true}");
+  });
+  server.on("/diagnostics", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String report=buildDiagnosticsReport();
+    AsyncWebServerResponse *response=request->beginResponse(200,"text/plain; charset=utf-8",report);
+    response->addHeader("Cache-Control","no-store");
+    request->send(response);
   });
   websocket.onEvent([](AsyncWebSocket *, AsyncWebSocketClient *, AwsEventType type,
                        void *arg, uint8_t *data, size_t length) {
