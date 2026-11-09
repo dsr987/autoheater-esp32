@@ -3,6 +3,7 @@
  * FIRMWARE_VERSION: 0.0.3
  * CHANGELOG_START
  * - Обновлён мобильный Web GUI: название проекта и версия сборки в шапке, индикаторы RSSI/override, полноэкранный портретный режим и увеличенные кнопки управления.
+ * - OLED упрощён: кириллический шрифт, ступень мощности 1–5, температура и краткое состояние на русском.
  * - Счётчики валидных кадров и CRC перенесены в диагностику; добавлен кольцевой журнал неизвестных состояний, ошибок, регистров и кадров с временными метками, копированием и TXT-экспортом.
  * - Состояния 0x04 (предположительно продувка после STOP) и 0x00 (предположительно ожидание) отмечены как гипотезы до повторной аппаратной проверки.
  * CHANGELOG_END
@@ -24,6 +25,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <U8g2_for_Adafruit_GFX.h>
 #include <math.h>
 #include <string.h>
 #include "web_page.h"
@@ -55,6 +57,7 @@ HardwareSerial HeaterSerial(1);
 AsyncWebServer server(80);
 AsyncWebSocket websocket("/ws");
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
+U8G2_FOR_ADAFRUIT_GFX oledFont;
 
 struct HeaterState {
   uint8_t state = 0, step = 0, error = 0xFF;
@@ -430,22 +433,6 @@ void silentPollTask(uint32_t now) {
   }
 }
 
-const char *stateName(uint8_t state) {
-  // Встроенный шрифт Adafruit GFX не содержит кириллицу.
-  // Используем ASCII, чтобы OLED не показывал нечитаемые символы.
-  switch (state) {
-    case 0x00: return "WAIT*";
-    case 0x04: return "PURGE*";
-    case 0x20: return "GLOW";
-    case 0x24: return "IGNITION";
-    case 0x25: return "FLAME";
-    case 0x27: return "RAMP UP";
-    case 0x2F: return "READY";
-    case 0x38: return "TRANSITION";
-    case 0x2E: return "RUN";
-    default: return "UNKNOWN";
-  }
-}
 
 int getStrongestApClientRssi() {
   wifi_sta_list_t stations={};
@@ -478,22 +465,75 @@ void broadcastState() {
   websocket.textAll(json);
 }
 
+int selectedPowerLevel(float power) {
+  if (!isfinite(power)) return 0;
+  size_t closest = 0;
+  float smallestDifference = INFINITY;
+  for (size_t i = 0; i < sizeof(POWER_LEVELS) / sizeof(POWER_LEVELS[0]); ++i) {
+    const float difference = fabsf(POWER_LEVELS[i] - power);
+    if (difference < smallestDifference) {
+      smallestDifference = difference;
+      closest = i;
+    }
+  }
+  return int(closest) + 1;
+}
+
 void drawOled() {
   if (!oledReady) return;
+
   const float shownPower = powerOverride ? desiredPower :
       (isfinite(heaterPower) ? heaterPower : panelPower);
+  const int programNumber = selectedPowerLevel(shownPower);
+  char status[24];
+
+  if (!heaterIsLive()) {
+    strcpy(status, "НЕТ СВЯЗИ");
+  } else if (heater.errorReceived && heater.error != 0xFF) {
+    snprintf(status, sizeof(status), "ОШИБКА %02X", heater.error);
+  } else {
+    switch (heater.state) {
+      case 0x00: strcpy(status, "ОЖИДАНИЕ*"); break;
+      case 0x04: strcpy(status, "ПРОДУВКА*"); break;
+      case 0x20: strcpy(status, "ПРОГРЕВ"); break;
+      case 0x24: strcpy(status, "РОЗЖИГ"); break;
+      case 0x25: strcpy(status, "ПЛАМЯ ЕСТЬ"); break;
+      case 0x27: strcpy(status, "РАЗГОН"); break;
+      case 0x2F: strcpy(status, "ВЫХОД НА РЕЖИМ"); break;
+      case 0x38: strcpy(status, "ПЕРЕХОД"); break;
+      case 0x2E: strcpy(status, "РАБОТА"); break;
+      default: strcpy(status, "НЕИЗВЕСТНО"); break;
+    }
+  }
+
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("AUTOHEATER ESP32");
-  display.printf("Bus: %s CRC:%lu/%lu\n", heaterIsLive() ? "LIVE" : "WAIT",
-                 (unsigned long)validFrames, (unsigned long)invalidFrames);
-  display.printf("State: %s\n", stateName(heater.state));
-  display.printf("Temp: %.1f C\n", isfinite(heater.nodeTemperature) ? heater.nodeTemperature : 0.0f);
-  display.printf("Power: %.0f W\n", isfinite(shownPower) ? shownPower : 0.0f);
-  display.printf("Fan: %lu RPM\n", (unsigned long)heater.fanRpm);
-  display.printf("Voltage: %.2f V\n", isfinite(heater.voltage) ? heater.voltage : 0.0f);
+
+  oledFont.setFontMode(1);
+  oledFont.setForegroundColor(SSD1306_WHITE);
+  oledFont.setFont(u8g2_font_6x12_t_cyrillic);
+  oledFont.setCursor(0, 11);
+  oledFont.print("РЕЖИМ");
+  oledFont.setCursor(61, 11);
+  oledFont.print("ТЕМП.");
+
+  display.setTextSize(3);
+  display.setCursor(17, 18);
+  if (programNumber > 0) display.print(programNumber);
+  else display.print("-");
+
+  display.setTextSize(2);
+  display.setCursor(62, 19);
+  if (isfinite(heater.nodeTemperature)) {
+    display.print(int(lroundf(heater.nodeTemperature)));
+    display.setTextSize(1);
+    display.print(" C");
+  } else {
+    display.print("--");
+  }
+
+  oledFont.setCursor(0, 62);
+  oledFont.print(status);
   display.display();
 }
 
@@ -547,6 +587,7 @@ void setup() {
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
   Wire.setClock(400000);
   oledReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledReady) oledFont.begin(display);
   if (!oledReady) Serial.println("[OLED] Display not found at 0x3C");
 
   HeaterSerial.setRxBufferSize(1024);
