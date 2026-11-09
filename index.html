@@ -1,135 +1,91 @@
 <!doctype html>
-<html lang="ru">
-<head>
+<html lang="ru"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#101820">
-<title>Autoheater ESP32</title>
+<title>Autoheater</title>
 <style>
-:root{color-scheme:dark;--bg:#101820;--line:#2b3c47;--text:#f2f6f8;--muted:#92a4b0;--green:#47c58a}
+:root{color-scheme:dark;--bg:#101820;--line:#2b3c47;--text:#f2f6f8;--muted:#92a4b0;--green:#47c58a;--red:#ef6262}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;min-height:100vh;padding:env(safe-area-inset-top) 16px calc(22px + env(safe-area-inset-bottom));font:16px system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(ellipse at top,#1b2b36 0%,var(--bg) 65%);color:var(--text)}
-main{width:100%;max-width:480px;margin:0 auto;min-height:calc(100vh - 22px);display:flex;flex-direction:column;gap:16px}
-header{padding:16px 4px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-h1{font-size:17px;letter-spacing:.12em;margin:0}header small{display:block;color:var(--muted);font-size:9px;letter-spacing:.2em;margin-top:3px}
-#connection{font-size:11px;color:var(--muted);text-align:right}
-.card{background:linear-gradient(145deg,#1c2b36,#15212a);border:1px solid var(--line);border-radius:18px;padding:16px;box-shadow:0 10px 25px #0002}
-.state{font-size:21px;font-weight:750;margin:0 0 14px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 10px}
+html,body{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
+body{position:fixed;inset:0;padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom);font:16px system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(ellipse at top,#1b2b36 0%,var(--bg) 65%);color:var(--text)}
+main{width:100%;max-width:480px;height:100%;margin:0 auto;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+header{flex:0 0 auto;min-height:54px;padding:5px 4px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+#title-toggle{appearance:none;background:transparent;border:0;border-radius:8px;min-height:0;padding:0;text-align:left;color:var(--text)}
+#title-toggle h1{font-size:19px;line-height:1.1;letter-spacing:.07em;margin:0;font-weight:800}
+#title-toggle small{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;margin-top:4px}
+.header-indicators{display:flex;align-items:center;gap:13px;padding-right:3px}
+.override-indicator{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 0 2px #ef626222;flex:0 0 auto}
+.override-indicator.active{background:var(--green);box-shadow:0 0 8px #47c58a99;animation:override-pulse 1.3s ease-in-out infinite}
+@keyframes override-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.25;transform:scale(.82)}}
+#wifi-icon{width:42px;height:30px;display:block;overflow:visible}
+#wifi-icon .bar{fill:#47c58a;opacity:.16}#wifi-icon .bar.on{opacity:1}
+#wifi-icon .cross{display:none;stroke:var(--red);stroke-width:2.8;stroke-linecap:round}
+#wifi-icon.no-signal .cross{display:block}#wifi-icon.no-signal .bar{opacity:.12}
+.card{flex:0 0 auto;background:linear-gradient(145deg,#1c2b36,#15212a);border:1px solid var(--line);border-radius:17px;padding:13px 14px;box-shadow:0 10px 25px #0002;min-height:0}
+.state{font-size:20px;font-weight:750;margin:0 0 12px;line-height:1.18}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:11px 10px}
 .label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
-.value{font-size:23px;font-weight:750;margin-top:3px;white-space:nowrap}
-.value small{font-size:12px;color:var(--muted);font-weight:500}
-.section-title{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0 0 12px}
-.controls,.power-controls{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-.power-controls{margin-top:9px}
-button{border:1px solid #344955;background:#263944;color:var(--text);border-radius:13px;min-height:54px;padding:12px 8px;font:700 15px system-ui;cursor:pointer;touch-action:manipulation}
-button:active:not(:disabled){transform:scale(.98);background:#344955}
-button:disabled{opacity:.35;cursor:not-allowed}
-#start{background:var(--green);color:#092217;border-color:var(--green)}
-#stop{background:#8f3838;border-color:#a94b4b}
-#power-level{text-align:center;font-size:14px;color:var(--muted);margin-top:12px}
-.note{font-size:11px;color:var(--muted);line-height:1.5;margin:12px 2px 0}
-footer{margin-top:auto;text-align:center;font-size:10px;color:#60737e;padding:8px}
-a{color:#8ee5c2}.error{color:#ff9b91}
-</style>
-</head>
-<body>
-<main>
-<header><div><h1>AUTOHEATER</h1><small>ESP32 CONTROL</small></div><div id="connection">Подключение…</div></header>
-<section class="card">
-  <div class="section-title">Состояние отопителя</div><div class="state" id="state">Ожидание данных</div>
-  <div class="grid">
-    <div><div class="label">Температура узла</div><div class="value" id="temperature">— <small>°C</small></div></div>
-    <div><div class="label">Напряжение</div><div class="value" id="voltage">— <small>В</small></div></div>
-    <div><div class="label">Вентилятор</div><div class="value" id="fan">— <small>об/мин</small></div></div>
-    <div><div class="label">Мощность</div><div class="value" id="power">— <small>Вт</small></div></div>
-    <div><div class="label">Шаг программы</div><div class="value" id="step">—</div></div>
-    <div><div class="label">Ошибка</div><div class="value" id="error">—</div></div>
-  </div>
-</section>
-<section class="card">
-  <div class="section-title">Управление</div>
-  <div class="controls"><button id="start">ПУСК</button><button id="stop">СТОП</button></div>
-  <div class="power-controls"><button id="power-down" disabled>Мощность −</button><button id="power-up" disabled>Мощность +</button></div>
-  <div id="power-level">Управление мощностью недоступно без связи с отопителем</div>
-  <p class="note">Команды отправляются в паузах шины. После остановки штатного пульта ESP32 продолжает опрашивать регистры отопителя. Кнопка «Стоп» остаётся доступной даже при потере телеметрии.</p>
-</section>
-<section class="card">
-  <div class="section-title">Система</div>
-  <div class="grid">
-    <div><div class="label">Связь</div><div class="value" id="bus">Нет</div></div>
-    <div><div class="label">Оверрайд мощности</div><div class="value" id="override">Нет</div></div>
-    <div><div class="label">Валидные кадры</div><div class="value" id="valid">0</div></div>
-    <div><div class="label">Ошибки CRC</div><div class="value" id="invalid">0</div></div>
-  </div>
-  <p class="note"><a href="/update">Обновление прошивки (OTA)</a></p>
-</section>
-<footer>LOCAL INTERFACE · AUTOHEATER ESP32</footer>
-</main>
+.value{font-size:22px;font-weight:750;margin-top:2px;white-space:nowrap;line-height:1.15}.value small{font-size:12px;color:var(--muted);font-weight:500}
+.section-title{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0 0 10px}
+.controls,.power-controls{display:grid;grid-template-columns:1fr 1fr;gap:9px}.power-controls{margin-top:9px}
+button{border:1px solid #344955;background:#263944;color:var(--text);border-radius:13px;min-height:62px;padding:13px 8px;font:750 17px system-ui;cursor:pointer;touch-action:manipulation}
+button:active:not(:disabled){transform:scale(.98);background:#344955}button:disabled{opacity:.35;cursor:not-allowed}
+#start{background:var(--green);color:#092217;border-color:var(--green)}#stop{background:#8f3838;border-color:#a94b4b}.error{color:#ff9b91}
+#action-bar{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:auto;flex:0 0 auto}
+#action-bar button{min-height:48px;font-size:14px;padding:9px}#open-diagnostics{background:#263944}#open-ota{background:#1d5b50;border-color:#287865}
+#fullscreen-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:#07101888;backdrop-filter:blur(13px);-webkit-backdrop-filter:blur(13px)}
+#fullscreen-overlay button{width:min(100%,340px);min-height:70px;font-size:18px;background:var(--green);color:#092217;border-color:var(--green);box-shadow:0 12px 45px #0007}
+body.is-fullscreen #fullscreen-overlay{display:none}
+#landscape-warning{display:none;position:fixed;inset:0;z-index:900;background:#101820;place-items:center;text-align:center;padding:30px;font-size:20px;font-weight:700}
+.modal-overlay{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:12px;background:#050b10bb;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.modal-overlay[hidden]{display:none}.modal{width:100%;max-width:480px;max-height:calc(100dvh - 24px);display:flex;flex-direction:column;gap:11px;background:#172630;border:1px solid #3a505d;border-radius:18px;padding:14px;box-shadow:0 18px 60px #0009;min-height:0}
+.modal-header{display:flex;justify-content:space-between;align-items:center;gap:10px}.modal-header h2{font-size:17px;margin:0}.modal-header button{min-height:38px;width:42px;padding:4px;font-size:20px}
+.diagnostic-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.stat{background:#20323e;border:1px solid #344955;border-radius:10px;padding:8px 6px;text-align:center}.stat span{display:block;font-size:10px;color:var(--muted)}.stat strong{display:block;font-size:19px;margin-top:2px}
+.log-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.log-actions button{min-height:43px;font-size:13px;padding:8px}
+#diagnostic-log{display:block;flex:1 1 auto;min-height:130px;max-height:44dvh;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text;background:#0b141b;border:1px solid #2b3c47;border-radius:10px;padding:11px;margin:0;color:#cde0e8;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+#diagnostic-hint{font-size:11px;color:var(--muted);margin:0}
+@media (orientation:landscape){body.is-fullscreen #control-ui{visibility:hidden}body.is-fullscreen #landscape-warning{display:grid}}
+@media (max-height:680px) and (orientation:portrait){main{gap:7px}header{min-height:47px;padding-bottom:7px}.card{padding:10px 12px}.grid{gap:8px}.value{font-size:20px}.state{font-size:18px;margin-bottom:8px}button{min-height:55px;font-size:16px}#action-bar button{min-height:43px}}
+</style></head><body>
+<main id="control-ui">
+<header><button id="title-toggle" type="button" aria-label="Переключить полноэкранный режим"><h1>Autoheater</h1><small>v__FIRMWARE_VERSION__</small></button>
+<div class="header-indicators"><span id="override-indicator" class="override-indicator" role="img" aria-label="Оверрайд не активен" title="Оверрайд не активен"></span>
+<svg id="wifi-icon" class="no-signal" viewBox="0 0 42 30" role="img" aria-label="Нет подключённых Wi-Fi клиентов">
+<rect class="bar" x="2" y="21" width="6" height="7" rx="1"/><rect class="bar" x="12" y="16" width="6" height="12" rx="1"/><rect class="bar" x="22" y="10" width="6" height="18" rx="1"/><rect class="bar" x="32" y="3" width="6" height="25" rx="1"/><path class="cross" d="M7 4 L35 27 M35 4 L7 27"/></svg></div></header>
+<section class="card"><div class="section-title">Состояние отопителя</div><div class="state" id="state">Ожидание данных</div><div class="grid">
+<div><div class="label">Температура узла</div><div class="value" id="temperature">— <small>°C</small></div></div><div><div class="label">Напряжение</div><div class="value" id="voltage">— <small>В</small></div></div>
+<div><div class="label">Вентилятор</div><div class="value" id="fan">— <small>об/мин</small></div></div><div><div class="label">Мощность</div><div class="value" id="power">— <small>Вт</small></div></div>
+<div><div class="label">Шаг программы</div><div class="value" id="step">—</div></div><div><div class="label">Ошибка</div><div class="value" id="error">—</div></div></div></section>
+<section class="card"><div class="section-title">Управление</div><div class="controls"><button id="start" type="button">ПУСК</button><button id="stop" type="button">СТОП</button></div><div class="power-controls"><button id="power-down" type="button" disabled>Мощность −</button><button id="power-up" type="button" disabled>Мощность +</button></div></section>
+<div id="action-bar"><button id="open-diagnostics" type="button">Диагностика</button><button id="open-ota" type="button">Обновить</button></div></main>
+<div id="fullscreen-overlay"><button id="enter-fullscreen" type="button">Включить интерфейс на весь экран</button></div><div id="landscape-warning">Поверните устройство вертикально</div>
+<div id="diagnostics-overlay" class="modal-overlay" hidden><section class="modal" role="dialog" aria-modal="true" aria-labelledby="diagnostics-title">
+<div class="modal-header"><h2 id="diagnostics-title">Диагностика</h2><button id="close-diagnostics" type="button" aria-label="Закрыть">×</button></div>
+<div class="diagnostic-stats"><div class="stat"><span>Валидные кадры</span><strong id="diag-valid">0</strong></div><div class="stat"><span>Ошибки CRC</span><strong id="diag-crc">0</strong></div><div class="stat"><span>Потеряно записей</span><strong id="diag-dropped">0</strong></div></div>
+<div class="log-actions"><button id="copy-log" type="button">Копировать лог</button><button id="save-log" type="button">Сохранить TXT</button></div><pre id="diagnostic-log">Загрузка диагностического журнала…</pre>
+<p id="diagnostic-hint">Временные метки отсчитываются от запуска ESP32. Журнал хранит последние 64 события в RAM до перезагрузки; при переполнении старые записи заменяются новыми.</p></section></div>
 <script>
-(() => {
-  const $ = id => document.getElementById(id);
-  const stateNames = {32:"Свеча / прогрев",36:"Розжиг",37:"Пламя поймано",39:"Набор мощности",47:"Выход на режим",46:"Установившееся горение",56:"Переход"};
-  let socket;
-  let reconnectTimer;
-  let lastDataAt = 0;
-
-  function setConnection(text, live) {
-    $("connection").textContent = text;
-    $("connection").style.color = live ? "var(--green)" : "var(--muted)";
-  }
-  function send(command) {
-    if (socket && socket.readyState === WebSocket.OPEN) socket.send(command);
-  }
-  function connect() {
-    clearTimeout(reconnectTimer);
-    socket = new WebSocket("ws://" + location.host + "/ws");
-    socket.onopen = () => setConnection("Веб подключён", false);
-    socket.onclose = () => {
-      setConnection("Переподключение…", false);
-      reconnectTimer = setTimeout(connect, 1500);
-    };
-    socket.onerror = () => socket.close();
-    socket.onmessage = event => {
-      let data;
-      try { data = JSON.parse(event.data); } catch (_) { return; }
-      lastDataAt = Date.now();
-      const live = Boolean(data.live);
-      const power = Number(data.pw);
-      setConnection(live ? "Отопитель на связи" : "Нет свежей телеметрии", live);
-      $("state").textContent = stateNames[data.st] || ("Состояние 0x" + Number(data.st).toString(16).toUpperCase().padStart(2,"0"));
-      $("temperature").innerHTML = Number(data.t).toFixed(1) + " <small>°C</small>";
-      $("voltage").innerHTML = Number(data.v).toFixed(2) + " <small>В</small>";
-      $("fan").innerHTML = Number(data.fan).toLocaleString("ru-RU") + " <small>об/мин</small>";
-      $("power").innerHTML = (Number.isFinite(power) && power > 0 ? power.toFixed(0) : "—") + " <small>Вт</small>";
-      $("step").textContent = data.step;
-      $("error").textContent = data.err === "FF" ? "Нет" : "0x" + data.err;
-      $("error").classList.toggle("error", data.err !== "FF");
-      $("bus").textContent = live ? "Есть" : "Нет";
-      $("override").textContent = data.override ? "Активен" : "Нет";
-      $("valid").textContent = data.valid;
-      $("invalid").textContent = data.invalid;
-      $("power-up").disabled = !live;
-      $("power-down").disabled = !live;
-      $("power-level").textContent = live
-        ? "Текущая уставка: " + (Number.isFinite(power) ? power.toFixed(0) : "—") + " Вт"
-        : "Управление мощностью недоступно без связи с отопителем";
-    };
-  }
-
-  $("start").addEventListener("click", () => send("start"));
-  $("stop").addEventListener("click", () => send("stop"));
-  $("power-up").addEventListener("click", () => send("pup"));
-  $("power-down").addEventListener("click", () => send("pdown"));
-  setInterval(() => {
-    if (lastDataAt && Date.now() - lastDataAt > 6000) {
-      setConnection("Телеметрия устарела", false);
-      $("power-up").disabled = true;
-      $("power-down").disabled = true;
-    }
-  }, 1000);
-  connect();
+(()=>{
+const $=id=>document.getElementById(id);
+const stateNames={0:"Ожидание (гипотеза)",4:"Продувка после остановки (гипотеза)",32:"Свеча / прогрев",36:"Розжиг",37:"Пламя поймано",39:"Набор мощности",46:"Установившееся горение",47:"Выход на режим",56:"Переход"};
+let socket,reconnectTimer,lastDataAt=0,diagnosticTimer=null,diagnosticsText="",visualFullscreenFallback=false;
+function send(command){if(socket&&socket.readyState===WebSocket.OPEN)socket.send(command);}
+function updateOverride(active){const el=$("override-indicator");el.classList.toggle("active",Boolean(active));el.setAttribute("aria-label",active?"Оверрайд активен":"Оверрайд не активен");el.title=active?"Оверрайд активен":"Оверрайд не активен";}
+function updateWifiSignal(rssi){const icon=$("wifi-icon"),connected=Number.isFinite(rssi)&&rssi>-127,level=!connected?0:(rssi>=-55?4:rssi>=-65?3:rssi>=-75?2:1);icon.querySelectorAll(".bar").forEach((bar,index)=>bar.classList.toggle("on",index<level));icon.classList.toggle("no-signal",!connected);icon.setAttribute("aria-label",connected?"Сигнал Wi-Fi клиента: "+rssi+" dBm":"Нет подключённых Wi-Fi клиентов");icon.title=connected?"Wi-Fi: "+rssi+" dBm":"Нет подключённых Wi-Fi клиентов";}
+function connect(){clearTimeout(reconnectTimer);socket=new WebSocket("ws://"+location.host+"/ws");socket.onclose=()=>{reconnectTimer=setTimeout(connect,1500);};socket.onerror=()=>socket.close();socket.onmessage=event=>{let data;try{data=JSON.parse(event.data);}catch(_){return;}lastDataAt=Date.now();const live=Boolean(data.live),power=Number(data.pw);$("state").textContent=stateNames[data.st]||("Неизвестное состояние 0x"+Number(data.st).toString(16).toUpperCase().padStart(2,"0"));$("temperature").innerHTML=Number(data.t).toFixed(1)+" <small>°C</small>";$("voltage").innerHTML=Number(data.v).toFixed(2)+" <small>В</small>";$("fan").innerHTML=Number(data.fan).toLocaleString("ru-RU")+" <small>об/мин</small>";$("power").innerHTML=(Number.isFinite(power)&&power>0?power.toFixed(0):"—")+" <small>Вт</small>";$("step").textContent=data.step;$("error").textContent=data.err==="FF"?"Нет":"0x"+data.err;$("error").classList.toggle("error",data.err!=="FF");updateOverride(data.override);updateWifiSignal(Number(data.rssi));$("power-up").disabled=!live;$("power-down").disabled=!live;};}
+async function enterFullscreen(){try{if(document.documentElement.requestFullscreen){if(!document.fullscreenElement)await document.documentElement.requestFullscreen({navigationUI:"hide"});visualFullscreenFallback=false;}else{visualFullscreenFallback=true;document.body.classList.add("is-fullscreen");}if(screen.orientation&&screen.orientation.lock){try{await screen.orientation.lock("portrait");}catch(_){}}}catch(_){visualFullscreenFallback=true;document.body.classList.add("is-fullscreen");}}
+function exitFullscreen(){if(document.fullscreenElement)document.exitFullscreen();else{visualFullscreenFallback=false;document.body.classList.remove("is-fullscreen");}}
+function toggleFullscreen(){if(document.fullscreenElement||visualFullscreenFallback)exitFullscreen();else enterFullscreen();}
+document.addEventListener("fullscreenchange",()=>{const active=Boolean(document.fullscreenElement)||visualFullscreenFallback;document.body.classList.toggle("is-fullscreen",active);if(!active&&screen.orientation&&screen.orientation.unlock){try{screen.orientation.unlock();}catch(_){}}});
+function parseMetric(text,key){const match=text.match(new RegExp("^"+key+"=(\\d+)","m"));return match?match[1]:"0";}
+async function refreshDiagnostics(){try{const response=await fetch("/diagnostics",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);diagnosticsText=await response.text();$("diag-valid").textContent=parseMetric(diagnosticsText,"valid_frames");$("diag-crc").textContent=parseMetric(diagnosticsText,"crc_errors");$("diag-dropped").textContent=parseMetric(diagnosticsText,"log_overwritten");const marker="--- LOG ---\n",index=diagnosticsText.indexOf(marker);$("diagnostic-log").textContent=index>=0?diagnosticsText.slice(index+marker.length).trim()||"Пока неизвестных или неподтверждённых кодов не обнаружено.":diagnosticsText;}catch(error){$("diagnostic-log").textContent="Не удалось загрузить журнал: "+error.message;}}
+function openDiagnostics(){$("diagnostics-overlay").hidden=false;refreshDiagnostics();if(diagnosticTimer)clearInterval(diagnosticTimer);diagnosticTimer=setInterval(refreshDiagnostics,2000);}
+function closeDiagnostics(){$("diagnostics-overlay").hidden=true;if(diagnosticTimer)clearInterval(diagnosticTimer);diagnosticTimer=null;}
+async function copyDiagnostics(){if(!diagnosticsText)await refreshDiagnostics();if(!diagnosticsText)return;try{if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(diagnosticsText);else{const temporary=document.createElement("textarea");temporary.value=diagnosticsText;temporary.style.position="fixed";temporary.style.opacity="0";document.body.appendChild(temporary);temporary.select();document.execCommand("copy");temporary.remove();}$("copy-log").textContent="Скопировано";setTimeout(()=>$("copy-log").textContent="Копировать лог",1400);}catch(_){$("copy-log").textContent="Не удалось скопировать";}}
+async function saveDiagnostics(){if(!diagnosticsText)await refreshDiagnostics();if(!diagnosticsText)return;const blob=new Blob([diagnosticsText],{type:"text/plain;charset=utf-8"}),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="autoheater-diagnostics.txt";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$("start").addEventListener("click",()=>send("start"));$("stop").addEventListener("click",()=>send("stop"));$("power-up").addEventListener("click",()=>send("pup"));$("power-down").addEventListener("click",()=>send("pdown"));
+$("enter-fullscreen").addEventListener("click",enterFullscreen);$("title-toggle").addEventListener("click",toggleFullscreen);$("open-diagnostics").addEventListener("click",openDiagnostics);$("close-diagnostics").addEventListener("click",closeDiagnostics);$("diagnostics-overlay").addEventListener("click",event=>{if(event.target===$("diagnostics-overlay"))closeDiagnostics();});$("copy-log").addEventListener("click",copyDiagnostics);$("save-log").addEventListener("click",saveDiagnostics);$("open-ota").addEventListener("click",()=>{const w=window.open("/update","_blank");if(!w)window.location.href="/update";});
+setInterval(()=>{if(lastDataAt&&Date.now()-lastDataAt>6000){$("power-up").disabled=true;$("power-down").disabled=true;updateWifiSignal(-127);}},1000);connect();
 })();
-</script>
-</body>
-</html>
+</script></body></html>
