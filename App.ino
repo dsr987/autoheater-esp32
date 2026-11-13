@@ -444,13 +444,6 @@ void silentPollTask(uint32_t now) {
 }
 
 
-int getStrongestApClientRssi() {
-  wifi_sta_list_t stations={};
-  if(esp_wifi_ap_get_sta_list(&stations)!=ESP_OK||stations.num==0)return -127;
-  int strongest=-127;
-  for(int i=0;i<stations.num;++i)if(stations.sta[i].rssi>strongest)strongest=stations.sta[i].rssi;
-  return strongest;
-}
 void broadcastState() {
   if (!websocket.count()) return;
   const bool live = heaterIsLive();
