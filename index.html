@@ -87,7 +87,7 @@ body.is-fullscreen #fullscreen-overlay{display:none}
 <label class="show-password"><input id="wifi-show-password" type="checkbox">Показать пароль</label>
 <div class="wifi-actions"><button id="wifi-save" type="submit">Сохранить и подключиться</button><button id="wifi-clear" type="button">Удалить настройки</button></div>
 </form>
-<p id="diagnostic-hint">Пароль хранится в памяти ESP32 и не отображается в интерфейсе после сохранения. Точка доступа Autoheater остаётся доступной независимо от подключения к домашней сети.</p>
+<p id="diagnostic-hint">Пароль сохраняется во внутренней памяти ESP32 (NVS) и не возвращается в интерфейс после сохранения. Точка доступа Autoheater остаётся доступной независимо от подключения к домашней сети.</p>
 </section></div>
 <script>
 (()=>{
