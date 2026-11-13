@@ -1,11 +1,9 @@
 /*
  * Autoheater ESP32
- * FIRMWARE_VERSION: 0.0.3
+ * FIRMWARE_VERSION: 0.0.4
  * CHANGELOG_START
- * - Обновлён мобильный Web GUI: название проекта и версия сборки в шапке, индикаторы RSSI/override, полноэкранный портретный режим и увеличенные кнопки управления.
- * - OLED упрощён: кириллический шрифт, ступень мощности 1–5, температура и краткое состояние на русском.
- * - Счётчики валидных кадров и CRC перенесены в диагностику; добавлен кольцевой журнал неизвестных состояний, ошибок, регистров и кадров с временными метками, копированием и TXT-экспортом.
- * - Состояния 0x04 (предположительно продувка после STOP) и 0x00 (предположительно ожидание) отмечены как гипотезы до повторной аппаратной проверки.
+ * - Подтверждено состояние 0x00 (ожидание); гипотезой остаётся только 0x04 (продувка после STOP).
+ * - Добавлен Wi-Fi Dual Mode: постоянная точка доступа и подключение к домашней сети с сохранением настроек.
  * CHANGELOG_END
  *
  * Единственный исходник прошивки. index.html в корне репозитория встраивается
@@ -17,7 +15,7 @@
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 #include <Arduino.h>
 #include <WiFi.h>
-#include <esp_wifi.h>
+#include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -56,6 +54,14 @@ constexpr uint8_t POLL_REGISTERS[] = {0x50, 0x0C, 0x0B, 0x20, 0x24, 0x16, 0x10, 
 HardwareSerial HeaterSerial(1);
 AsyncWebServer server(80);
 AsyncWebSocket websocket("/ws");
+bool wifiConfigured = false;
+bool wifiConnecting = false;
+String wifiSsid, wifiPassword;
+uint32_t wifiConnectStartedMs = 0;
+uint32_t lastWifiAttemptMs = 0;
+uint32_t wifiRetryDelayMs = 5000;
+constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
+constexpr uint32_t WIFI_RETRY_MAX_MS = 60000;
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 U8G2_FOR_ADAFRUIT_GFX oledFont;
 
@@ -215,9 +221,9 @@ void expirePendingResponse(uint32_t now) {
 
 bool isConfirmedHeaterState(uint8_t state) {
   switch (state) {
-    case 0x20: case 0x24: case 0x25: case 0x27: case 0x2F: case 0x38: case 0x2E:
+    case 0x00: case 0x20: case 0x24: case 0x25: case 0x27: case 0x2F: case 0x38: case 0x2E:
       return true;
-    default: // 0x00 and 0x04 are observed after STOP, but remain hypotheses.
+    default: // 0x04 remains a hypothesis.
       return false;
   }
 }
@@ -434,13 +440,6 @@ void silentPollTask(uint32_t now) {
 }
 
 
-int getStrongestApClientRssi() {
-  wifi_sta_list_t stations={};
-  if(esp_wifi_ap_get_sta_list(&stations)!=ESP_OK||stations.num==0)return -127;
-  int strongest=-127;
-  for(int i=0;i<stations.num;++i)if(stations.sta[i].rssi>strongest)strongest=stations.sta[i].rssi;
-  return strongest;
-}
 void broadcastState() {
   if (!websocket.count()) return;
   const bool live = heaterIsLive();
@@ -450,18 +449,19 @@ void broadcastState() {
   char heaterPowerJson[24];
   if (isfinite(heaterPower)) snprintf(heaterPowerJson, sizeof(heaterPowerJson), "%.0f", heaterPower);
   else strcpy(heaterPowerJson, "null");
-  const int wifiRssi=getStrongestApClientRssi();
+  const bool staConnected = WiFi.status() == WL_CONNECTED;
+  const int wifiRssi = staConnected ? WiFi.RSSI() : -127;
   snprintf(json,sizeof(json),
     "{\"st\":%u,\"step\":%u,\"err\":\"%02X\",\"t\":%.1f,\"v\":%.2f,"
     "\"fan\":%lu,\"dose\":%lu,\"tp\":%.1f,\"pw\":%.0f,\"hp\":%s,"
-    "\"override\":%s,\"live\":%s,\"rssi\":%d}",
+    "\"override\":%s,\"live\":%s,\"rssi\":%d,\"sta\":%s}",
     heater.state,heater.step,heater.error,
     isfinite(heater.nodeTemperature)?heater.nodeTemperature:0.0f,
     isfinite(heater.voltage)?heater.voltage:0.0f,
     (unsigned long)heater.fanRpm,(unsigned long)heater.fuelDoses,
     isfinite(heater.panelTemperature)?heater.panelTemperature:0.0f,
     isfinite(shownPower)?shownPower:0.0f,heaterPowerJson,
-    powerOverride?"true":"false",live?"true":"false",wifiRssi);
+    powerOverride?"true":"false",live?"true":"false",wifiRssi,staConnected?"true":"false");
   websocket.textAll(json);
 }
 
@@ -493,7 +493,7 @@ void drawOled() {
     snprintf(status, sizeof(status), "ОШИБКА %02X", heater.error);
   } else {
     switch (heater.state) {
-      case 0x00: strcpy(status, "ОЖИДАНИЕ*"); break;
+      case 0x00: strcpy(status, "ОЖИДАНИЕ"); break;
       case 0x04: strcpy(status, "ПРОДУВКА*"); break;
       case 0x20: strcpy(status, "ПРОГРЕВ"); break;
       case 0x24: strcpy(status, "РОЗЖИГ"); break;
@@ -537,16 +537,145 @@ void drawOled() {
   display.display();
 }
 
-void setupWeb() {
-  WiFi.mode(WIFI_AP);
-  if (!WiFi.softAP(AP_SSID, AP_PASSWORD)) {
-    Serial.println("[ERROR] Wi-Fi access point failed");
+
+void loadWifiCredentials() {
+  Preferences preferences;
+  if (!preferences.begin("wifi", true)) {
+    wifiConfigured = false;
     return;
   }
+  wifiSsid = preferences.getString("ssid", "");
+  wifiPassword = preferences.getString("password", "");
+  preferences.end();
+  wifiConfigured = wifiSsid.length() > 0;
+}
+
+void startWifiStation() {
+  if (!wifiConfigured) return;
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+  wifiConnecting = true;
+  wifiConnectStartedMs = millis();
+  lastWifiAttemptMs = wifiConnectStartedMs;
+}
+
+void wifiTask(uint32_t now) {
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnecting = false;
+    wifiRetryDelayMs = 5000;
+    return;
+  }
+  if (!wifiConfigured) {
+    wifiConnecting = false;
+    return;
+  }
+  if (wifiConnecting && uint32_t(now - wifiConnectStartedMs) >= WIFI_CONNECT_TIMEOUT_MS) {
+    wifiConnecting = false;
+    lastWifiAttemptMs = now;
+    wifiRetryDelayMs = wifiRetryDelayMs < WIFI_RETRY_MAX_MS / 2
+        ? wifiRetryDelayMs * 2 : WIFI_RETRY_MAX_MS;
+  }
+  if (!wifiConnecting && uint32_t(now - lastWifiAttemptMs) >= wifiRetryDelayMs)
+    startWifiStation();
+}
+
+String jsonEscape(const String &value) {
+  String escaped;
+  escaped.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value[i];
+    if (c == '\\' || c == '"') {
+      escaped += '\\';
+      escaped += c;
+    } else if (uint8_t(c) >= 0x20) {
+      escaped += c;
+    }
+  }
+  return escaped;
+}
+
+String buildWifiStatusJson() {
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  String json;
+  json.reserve(220);
+  json += "{\"configured\":";
+  json += wifiConfigured ? "true" : "false";
+  json += ",\"connecting\":";
+  json += wifiConnecting ? "true" : "false";
+  json += ",\"connected\":";
+  json += connected ? "true" : "false";
+  json += ",\"ssid\":\"";
+  json += jsonEscape(wifiSsid);
+  json += "\",\"ip\":\"";
+  json += connected ? WiFi.localIP().toString() : "0.0.0.0";
+  json += "\",\"rssi\":";
+  json += connected ? String(WiFi.RSSI()) : String(-127);
+  json += "}";
+  return json;
+}
+
+void setupWeb() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setAutoReconnect(true);
+  if (!WiFi.softAP(AP_SSID, AP_PASSWORD))
+    Serial.println("[ERROR] Wi-Fi access point failed");
+
+  loadWifiCredentials();
+  if (wifiConfigured) startWifiStation();
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send_P(200, "text/html; charset=utf-8", PAGE_HTML);
   });
   server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", "{\"ok\":true}");
+  });
+  server.on("/wifi/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", buildWifiStatusJson());
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+  });
+  server.on("/wifi/config", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("ssid", true) || !request->hasParam("password", true)) {
+      request->send(400, "application/json", "{\"ok\":false,\"error\":\"Missing SSID or password\"}");
+      return;
+    }
+    const String ssid = request->getParam("ssid", true)->value();
+    const String password = request->getParam("password", true)->value();
+    if (!ssid.length() || ssid.length() > 32 || password.length() > 63 ||
+        (password.length() > 0 && password.length() < 8)) {
+      request->send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid SSID or password length\"}");
+      return;
+    }
+    Preferences preferences;
+    if (!preferences.begin("wifi", false)) {
+      request->send(500, "application/json", "{\"ok\":false,\"error\":\"Storage unavailable\"}");
+      return;
+    }
+    preferences.putString("ssid", ssid);
+    preferences.putString("password", password);
+    preferences.end();
+    wifiSsid = ssid;
+    wifiPassword = password;
+    wifiConfigured = true;
+    WiFi.disconnect(false, false);
+    wifiConnecting = false;
+    wifiRetryDelayMs = 5000;
+    lastWifiAttemptMs = millis() - wifiRetryDelayMs;
+    startWifiStation();
+    request->send(202, "application/json", "{\"ok\":true}");
+  });
+  server.on("/wifi/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
+    Preferences preferences;
+    if (!preferences.begin("wifi", false)) {
+      request->send(500, "application/json", "{\"ok\":false,\"error\":\"Storage unavailable\"}");
+      return;
+    }
+    preferences.clear();
+    preferences.end();
+    wifiSsid = "";
+    wifiPassword = "";
+    wifiConfigured = false;
+    wifiConnecting = false;
+    WiFi.disconnect(false, false);
     request->send(200, "application/json", "{\"ok\":true}");
   });
   server.on("/diagnostics", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -577,13 +706,14 @@ void setupWeb() {
   ElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
   server.begin();
   Serial.printf("[WiFi] AP %s, IP %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+  if (wifiConfigured) Serial.printf("[WiFi] STA credentials loaded for %s\n", wifiSsid.c_str());
 }
 }  // namespace
 
 void setup() {
   Serial.begin(CONSOLE_BAUD);
   delay(200);
-  Serial.println("\nAutoheater ESP32 v0.0.2");
+  Serial.println("\nAutoheater ESP32 v0.0.4");
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
   Wire.setClock(400000);
   oledReady = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -603,6 +733,7 @@ void setup() {
 void loop() {
   pumpRx();
   const uint32_t now = millis();
+  wifiTask(now);
   expirePendingResponse(now);
   silentPollTask(now);
   injectTask();
