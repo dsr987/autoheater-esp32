@@ -46,7 +46,7 @@ body.is-fullscreen #fullscreen-overlay{display:none}
 .diagnostic-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.stat{background:#20323e;border:1px solid #344955;border-radius:10px;padding:8px 6px;text-align:center}.stat span{display:block;font-size:10px;color:var(--muted)}.stat strong{display:block;font-size:19px;margin-top:2px}
 .log-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.log-actions button{min-height:43px;font-size:13px;padding:8px}
 #diagnostic-log{display:block;flex:1 1 auto;min-height:130px;max-height:44dvh;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text;background:#0b141b;border:1px solid #2b3c47;border-radius:10px;padding:11px;margin:0;color:#cde0e8;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
-#diagnostic-hint{font-size:11px;color:var(--muted);margin:0}
+#diagnostic-hint,.wifi-hint{font-size:11px;color:var(--muted);margin:0}
 .wifi-form{display:flex;flex-direction:column;gap:9px}
 .wifi-form label{font-size:12px;color:var(--muted)}
 .wifi-form input{width:100%;margin-top:5px;padding:12px;border:1px solid #405663;border-radius:10px;background:#0b141b;color:var(--text);font:16px system-ui}
@@ -87,7 +87,7 @@ body.is-fullscreen #fullscreen-overlay{display:none}
 <label class="show-password"><input id="wifi-show-password" type="checkbox">Показать пароль</label>
 <div class="wifi-actions"><button id="wifi-save" type="submit">Сохранить и подключиться</button><button id="wifi-clear" type="button">Удалить настройки</button></div>
 </form>
-<p id="diagnostic-hint">Пароль сохраняется во внутренней памяти ESP32 (NVS) и не возвращается в интерфейс после сохранения. Точка доступа Autoheater остаётся доступной независимо от подключения к домашней сети.</p>
+<p class="wifi-hint">Пароль сохраняется во внутренней памяти ESP32 (NVS) и не возвращается в интерфейс после сохранения. Точка доступа Autoheater остаётся доступной независимо от подключения к домашней сети.</p>
 </section></div>
 <script>
 (()=>{
