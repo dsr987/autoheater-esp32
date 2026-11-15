@@ -461,8 +461,7 @@ void broadcastState() {
   else strcpy(heaterPowerJson, "null");
   const bool staConnected = WiFi.status() == WL_CONNECTED;
   const int wifiRssi = staConnected ? WiFi.RSSI() : -127;
-  const int program = selectedPowerLevel(shownPower);
-  const int displayedProgram = program > 0 ? program : savedProgramLevel;
+  const int displayedProgram = savedProgramLevel;
   snprintf(json,sizeof(json),
     "{\"st\":%u,\"step\":%u,\"program\":%d,\"err\":\"%02X\",\"t\":%.1f,\"v\":%.2f,"
     "\"fan\":%lu,\"dose\":%lu,\"tp\":%.1f,\"pw\":%.0f,\"hp\":%s,"
@@ -496,8 +495,7 @@ void drawOled() {
 
   const float shownPower = powerOverride ? desiredPower :
       (isfinite(heaterPower) ? heaterPower : panelPower);
-  const int currentProgram = selectedPowerLevel(shownPower);
-  const int programNumber = currentProgram > 0 ? currentProgram : savedProgramLevel;
+  const int programNumber = savedProgramLevel;
   char status[24];
 
   if (!heaterIsLive()) {
