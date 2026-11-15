@@ -1,9 +1,12 @@
 /*
  * Autoheater ESP32
- * FIRMWARE_VERSION: 0.0.4
+ * FIRMWARE_VERSION: 0.0.5
  * CHANGELOG_START
- * - Подтверждено состояние 0x00 (ожидание); гипотезой остаётся только 0x04 (продувка после STOP).
- * - Добавлен Wi-Fi Dual Mode: постоянная точка доступа и подключение к домашней сети с сохранением настроек.
+ * - Добавлено сохранение выбранной ступени мощности 1–5 в NVS и восстановление при запуске.
+ * - Подтверждены состояния 0x00 (ожидание) и 0x04 (продувка после остановки); 0x0D — гипотеза «дожиг топлива».
+ * - В веб-интерфейсе отображаются текст состояния и код состояния; OLED показывает только текст.
+ * - Добавлена вторая антенна-заглушка для будущего отображения RSSI телефона в Android-приложении.
+ * - Wi-Fi Dual Mode: точка доступа и подключение к домашней сети.
  * CHANGELOG_END
  *
  * Единственный исходник прошивки. index.html в корне репозитория встраивается
@@ -144,6 +147,7 @@ TxFrame txQueue[TX_QUEUE_SIZE];
 size_t txHead = 0, txTail = 0;
 
 float panelPower = NAN, heaterPower = NAN, desiredPower = POWER_LEVELS[0];
+uint8_t savedProgramLevel = 1;
 bool powerOverride = false, oledReady = false;
 uint8_t pendingRegister = 0xFF;
 bool awaitingResponse = false;
@@ -221,9 +225,9 @@ void expirePendingResponse(uint32_t now) {
 
 bool isConfirmedHeaterState(uint8_t state) {
   switch (state) {
-    case 0x00: case 0x20: case 0x24: case 0x25: case 0x27: case 0x2F: case 0x38: case 0x2E:
+    case 0x00: case 0x04: case 0x20: case 0x24: case 0x25: case 0x27: case 0x2F: case 0x38: case 0x2E:
       return true;
-    default: // 0x04 remains a hypothesis.
+    default: // 0x0D remains a hypothesis.
       return false;
   }
 }
@@ -424,6 +428,12 @@ bool commandPower(int direction) {
   }
   const int selected = constrain(int(closest) + direction, 0, 4);
   desiredPower = POWER_LEVELS[selected];
+  savedProgramLevel = uint8_t(selected + 1);
+  Preferences preferences;
+  if (preferences.begin("heater", false)) {
+    preferences.putUChar("program", savedProgramLevel);
+    preferences.end();
+  }
   powerOverride = true;
   return enqueueWriteFloat(0x01, desiredPower);
 }
@@ -451,11 +461,12 @@ void broadcastState() {
   else strcpy(heaterPowerJson, "null");
   const bool staConnected = WiFi.status() == WL_CONNECTED;
   const int wifiRssi = staConnected ? WiFi.RSSI() : -127;
+  const int displayedProgram = savedProgramLevel;
   snprintf(json,sizeof(json),
-    "{\"st\":%u,\"step\":%u,\"err\":\"%02X\",\"t\":%.1f,\"v\":%.2f,"
+    "{\"st\":%u,\"step\":%u,\"program\":%d,\"err\":\"%02X\",\"t\":%.1f,\"v\":%.2f,"
     "\"fan\":%lu,\"dose\":%lu,\"tp\":%.1f,\"pw\":%.0f,\"hp\":%s,"
     "\"override\":%s,\"live\":%s,\"rssi\":%d,\"sta\":%s}",
-    heater.state,heater.step,heater.error,
+    heater.state,heater.step,displayedProgram,heater.error,
     isfinite(heater.nodeTemperature)?heater.nodeTemperature:0.0f,
     isfinite(heater.voltage)?heater.voltage:0.0f,
     (unsigned long)heater.fanRpm,(unsigned long)heater.fuelDoses,
@@ -484,7 +495,7 @@ void drawOled() {
 
   const float shownPower = powerOverride ? desiredPower :
       (isfinite(heaterPower) ? heaterPower : panelPower);
-  const int programNumber = selectedPowerLevel(shownPower);
+  const int programNumber = savedProgramLevel;
   char status[24];
 
   if (!heaterIsLive()) {
@@ -494,7 +505,8 @@ void drawOled() {
   } else {
     switch (heater.state) {
       case 0x00: strcpy(status, "ОЖИДАНИЕ"); break;
-      case 0x04: strcpy(status, "ПРОДУВКА*"); break;
+      case 0x04: strcpy(status, "ПРОДУВКА"); break;
+      case 0x0D: strcpy(status, "ДОЖИГ ТОПЛИВА*"); break;
       case 0x20: strcpy(status, "ПРОГРЕВ"); break;
       case 0x24: strcpy(status, "РОЗЖИГ"); break;
       case 0x25: strcpy(status, "ПЛАМЯ ЕСТЬ"); break;
@@ -537,6 +549,15 @@ void drawOled() {
   display.display();
 }
 
+
+void loadPowerProgram() {
+  Preferences preferences;
+  if (!preferences.begin("heater", true)) return;
+  savedProgramLevel = preferences.getUChar("program", 1);
+  preferences.end();
+  if (savedProgramLevel < 1 || savedProgramLevel > 5) savedProgramLevel = 1;
+  desiredPower = POWER_LEVELS[savedProgramLevel - 1];
+}
 
 void loadWifiCredentials() {
   Preferences preferences;
@@ -727,6 +748,7 @@ void setup() {
   lastRxMs = now;
   lastPanelActivityMs = now;
   lastSilentPollMs = now - SILENT_POLL_INTERVAL_MS;
+  loadPowerProgram();
   setupWeb();
 }
 
